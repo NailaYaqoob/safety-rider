@@ -1,0 +1,15 @@
+# Runtime dependencies for deploying the Safety Rider service.
+#
+# Deliberately NOT `-r requirements.txt`: that pulls in JupyterLab, pandas,
+# matplotlib, folium, reportlab and Pillow (~146 MB) for the notebooks, none of
+# which the service imports. Use requirements-service.txt locally if you want
+# the notebooks too; this file is what the container installs.
+#
+# Derived from the actual imports across safety_rider/ and fortyguard/.
+
+requests>=2.31.0          # fortyguard client transport
+python-dotenv>=1.0.0      # .env loading in safety_rider.config
+shapely>=2.0.0            # STRtree tile lookup in heat_layer
+fastapi>=0.110.0          # the app (brings pydantic)
+uvicorn[standard]>=0.29.0 # ASGI server
+httpx>=0.27.0             # async Graph API + OSRM calls

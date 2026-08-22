@@ -1,0 +1,13 @@
+venv/
+.git/
+.env
+__pycache__/
+*.pyc
+notebooks/
+docs/
+assets/
+tests/
+data/
+*.md
+!README.md
+.pip-tmp/

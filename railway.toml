@@ -1,0 +1,20 @@
+# Railway deployment for Safety Rider.
+#
+# Why Railway and not Vercel: this service holds long-lived SSE connections,
+# keeps rider state in memory, and runs work in background tasks AFTER the
+# webhook has already returned 200 — all of which need a persistent process.
+# Vercel's serverless functions provide none of them.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Single replica: see the note in the Dockerfile about in-memory state.
+numReplicas = 1
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+# Meta retries a failed webhook for hours, so a crash-looping instance is worse
+# than a slow one. Restart, but give up rather than hammering.
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

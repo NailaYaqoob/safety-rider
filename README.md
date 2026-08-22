@@ -211,6 +211,16 @@ gives the same answer every time — a demo you can rehearse. Simulated readings
 are always labelled `SIMULATED` in the reply so they cannot be mistaken for
 measurements.
 
+### Deploy
+
+```bash
+# Railway reads railway.toml and builds from the Dockerfile.
+# Set your env vars, generate a domain, done.
+```
+
+Full walkthrough — including why this service cannot run on Vercel — in
+[DEPLOY.md](DEPLOY.md).
+
 ### Connect WhatsApp
 
 Meta only calls **public HTTPS**, so expose the port:
