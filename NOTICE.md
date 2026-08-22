@@ -9,7 +9,7 @@ before reusing anything from it.
 
 | | |
 |---|---|
-| **What** | `fortyguard/`, `notebooks/`, `docs/`, `data/`, `assets/`, `LICENSE`, `README.md` |
+| **What** | `fortyguard/`, `notebooks/`, `docs/`, `data/`, `assets/`, `LICENSE` |
 | **Owner** | FortyGuard, Inc. |
 | **Licence** | MIT — see [LICENSE](LICENSE) |
 | **Source** | [FortyGuard-Tech/temperature-api-quickstart](https://github.com/FortyGuard-Tech/temperature-api-quickstart) |
@@ -23,43 +23,42 @@ unchanged; nothing in this file alters it.
 
 | | |
 |---|---|
-| **What** | `safety_rider/`, `tests/`, `requirements-service.txt`, this file, `CONTRIBUTORS.md` |
+| **What** | `safety_rider/`, `tests/`, `requirements-service.txt`, this file, `CONTRIBUTORS.md`, `README.md` |
 | **Owner** | © 2026 Naila Yaqoob |
 
-**Ownership is retained by the author.** Building on FortyGuard's MIT-licensed
-template does not transfer ownership of this work to FortyGuard, and entering it
-in the hackathon does not either.
+### The governing terms
 
-### Licence granted to FortyGuard
+Ownership and the licence granted to FortyGuard are set by the **FortyGuard
+Hackathon'26 Participant Handbook**, which states in full:
 
-Naila Yaqoob grants FortyGuard, Inc. a **non-exclusive, worldwide,
-royalty-free, perpetual licence to showcase** Safety Rider. Specifically,
-FortyGuard may:
+> **4. Your project:** You own what you build. By submitting, you let us show
+> and share your project and your team's name to run and promote the hackathon.
+> Your work must be your own, use our Temperature data, and not copy anyone
+> else's.
 
-- display, demonstrate, and publicly perform the project — live, recorded, or
-  in screenshots;
-- reproduce and distribute copies of the project, or excerpts of it, **for the
-  purpose of showcasing it** — hackathon galleries, blog posts, conference
-  talks, case studies, social media, documentation, and marketing or
-  educational material;
-- name the author and the project in those materials.
+That paragraph is the agreement. This file records it and does not extend it.
 
-This grant is limited to showcasing. It is **not**:
+### What it means
 
-- a transfer or assignment of copyright or any other ownership interest;
-- an exclusive licence — the author remains free to use, license, relicense,
-  publish, or commercialise this work however she chooses, including with other
-  parties;
-- permission to sell the work, to incorporate it into a commercial product or
-  service, or to create and distribute derivative works beyond what showcasing
-  requires;
-- a licence to sublicense any of the above to third parties, except as needed
-  to publish showcase material through ordinary channels (a hosting provider,
-  a video platform, a conference organiser).
+**You own what you build.** Ownership of Safety Rider rests with the author.
+Building on FortyGuard's MIT-licensed template does not transfer it, and
+submitting to the hackathon does not either.
+
+**FortyGuard may show and share the project and the author's name** for the
+purpose of running and promoting the hackathon — demos, galleries, write-ups,
+social posts, and similar promotional use.
+
+**The grant is limited to that purpose.** It is not a transfer of copyright, not
+an exclusive licence, and not permission to sell the work or build commercial
+derivatives from it. The author remains free to use, publish, license, or
+commercialise this work however she chooses.
+
+**The work is original.** `safety_rider/` and `tests/` were written for this
+project and are not copied from anyone else, as the handbook requires.
 
 ### Attribution
 
-When showcasing, please credit:
+When showing or sharing, please credit:
 
 > **Safety Rider** — Naila Yaqoob ([@NailaYaqoob](https://github.com/NailaYaqoob)),
 > built on the FortyGuard Temperature API.
@@ -71,18 +70,27 @@ file. If you want to use it, ask the author.
 
 ---
 
-## A caveat worth reading
+## 3. FortyGuard's API and data
 
-This file is a plain-language statement of the ownership arrangement described
-to the author — she keeps ownership, FortyGuard gets a showcase licence — and it
-was drafted to match that description. It is **not legal advice**, and it is not
-a substitute for the hackathon's own terms.
+Per handbook rule 3, FortyGuard's data, API, and models remain theirs, API
+access is granted for this hackathon project only, and access ends when the
+hackathon ends. The handbook also requires the API key to be kept private:
 
-If the hackathon rules, an entry form, or a signed agreement say something
-different about ownership or licensing, **those govern, not this file.** Read
-them, and if they conflict with what you were told verbally, raise it with
-FortyGuard (<info@fortyguard.com>) and get the answer in writing before the
-submission deadline.
+- No credential is committed to this repository. `.env` is git-ignored;
+  `.env.example` contains placeholders only.
+- Cached API responses fetched at runtime (`data/heatmaps/heatmap_rider_*`,
+  `data/env_params/env_params_rider_*`) are git-ignored.
+- Sample responses that ship with the upstream template are FortyGuard's and
+  are covered by the MIT licence above.
+
+---
+
+## A note on precedence
+
+This file is a plain-language record of the handbook's terms, written for people
+reading the repository. It is **not legal advice** and it is **not a separate
+agreement**. Where anything here differs from the Participant Handbook or any
+other document signed with FortyGuard, **those govern.**
 
 ---
 
