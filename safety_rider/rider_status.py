@@ -255,16 +255,14 @@ def _actions_for(
 
 
 def cooler_route_hint(temp: float) -> str:
-    """Placeholder for the cooler-route recommendation.
+    """Tell the rider how to ask for a cooler route.
 
-    **Not implemented yet.** The route comparison needs the OSRM leg (fetch two
-    or three candidate routes, score each against the exceedance layer, return
-    the coolest) that is the next phase of this project. Until it exists, the
-    Danger protocol says what it *can* say honestly rather than promising a
-    re-route that will not arrive. Swap this for the real call and the rest of
-    the Danger branch is unchanged.
+    The comparison itself lives in :mod:`safety_rider.routing`; this is only the
+    prompt. It stays here so the Danger protocol reads as one list of actions,
+    and so ``rider_status`` keeps no dependency on the routing module — the
+    bands must be evaluable without a network.
     """
     return (
-        "Send me your destination and I'll look for a shadier route once "
-        "re-routing is live."
+        "Reply with your destination as `to <lat>,<lon>` and I'll compare "
+        "routes for heat exposure."
     )

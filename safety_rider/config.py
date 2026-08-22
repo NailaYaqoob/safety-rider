@@ -150,6 +150,32 @@ class Settings:
         in {"1", "true", "yes"}
     )
 
+    # ── Routing (safety_rider/routing.py) ──────────────────────────────────
+    #: OSRM instance used for candidate routes. The public demo works but is
+    #: rate-limited, returns no alternatives, and offers no uptime guarantee —
+    #: run your own before anyone depends on this.
+    osrm_base_url: str = field(
+        default_factory=lambda: _env("SAFETY_RIDER_OSRM_URL")
+        or "https://router.project-osrm.org"
+    )
+
+    #: OSRM profile. The public demo only serves "driving"; a self-hosted
+    #: instance can offer "cycling", which matches a bike courier better.
+    osrm_profile: str = field(
+        default_factory=lambda: _env("SAFETY_RIDER_OSRM_PROFILE") or "driving"
+    )
+
+    osrm_timeout_s: float = field(
+        default_factory=lambda: float(_env("SAFETY_RIDER_OSRM_TIMEOUT_S") or 15)
+    )
+
+    #: Hard cap on heat-grid cells sampled per route. Each NEW cell costs two
+    #: heatmap requests (~8,440 credits), so without this a long route could
+    #: quietly spend a fortune. Cells already cached are free.
+    max_route_cells: int = field(
+        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_MAX_ROUTE_CELLS") or 4))
+    )
+
     # ── Dashboard / demo ───────────────────────────────────────────────────
     #: Set truthy to show riders' full phone numbers on the dashboard. Off by
     #: default because the dashboard is meant to be screen-shared.

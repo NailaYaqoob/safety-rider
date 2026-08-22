@@ -186,3 +186,36 @@ def coordinates_from_text(text: str | None) -> RiderLocation | None:
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         return None
     return RiderLocation(latitude=latitude, longitude=longitude, name="typed coordinates")
+
+
+#: ``to 37.4419, -122.1430`` / ``-> 37.44,-122.14`` / ``dest: …``
+#: The origin is the rider's last known location, which the service already
+#: tracks, so a destination alone is enough to ask for a route.
+_DESTINATION_RE = re.compile(
+    r"^\s*(?:to|dest(?:ination)?|->|→)\s*[:\s]\s*"
+    r"(?P<lat>[-+]?\d{1,2}(?:\.\d+)?)\s*[,;/\s]\s*(?P<lon>[-+]?\d{1,3}(?:\.\d+)?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def destination_from_text(text: str | None) -> RiderLocation | None:
+    """Parse a routing request like ``to 37.4419,-122.1430``, or None.
+
+    Kept separate from :func:`coordinates_from_text` because the two mean
+    different things: a bare pair is "where I am", a prefixed one is "where I
+    am going". Conflating them would turn every shared location into a routing
+    request.
+    """
+    if not text:
+        return None
+    match = _DESTINATION_RE.match(text)
+    if not match:
+        return None
+    try:
+        latitude = float(match.group("lat"))
+        longitude = float(match.group("lon"))
+    except ValueError:
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return RiderLocation(latitude=latitude, longitude=longitude, name="destination")

@@ -30,10 +30,11 @@ from ..config import settings
 from ..events import Event, RiderState, hub, mask_number
 from ..models import RiderLocation
 from ..rider_status import RiderSafetyStatus, evaluate_rider_safety_status
+from ..routing import compare_routes
 from ..temperature_service import get_hyperlocal_temperature
 from . import graph_client
 from .models import InboundMessage
-from .parser import coordinates_from_text, iter_inbound_messages
+from .parser import coordinates_from_text, destination_from_text, iter_inbound_messages
 
 log = logging.getLogger(__name__)
 
@@ -184,6 +185,13 @@ async def handle_message(message: InboundMessage) -> None:
             graph_client.mark_as_read(message.message_id), "read receipt"
         )
 
+        # A destination is a routing request, not a position update, so it is
+        # checked first — otherwise "to 37.4,-122.1" would be read as a pin.
+        destination = destination_from_text(message.text)
+        if destination is not None:
+            await _compare_and_reply(message, destination)
+            return
+
         location = message.location or coordinates_from_text(message.text)
         if location is None:
             # Nothing to evaluate. Ask for a pin — it is a two-tap action in
@@ -248,6 +256,82 @@ async def _evaluate_and_reply(message: InboundMessage, location: RiderLocation) 
 
     if status.rest_protocol:
         await _trigger_rest_protocol(message, location, status)
+
+
+async def _compare_and_reply(message: InboundMessage, destination: RiderLocation) -> None:
+    """Answer a routing request by comparing candidate routes for heat.
+
+    The origin is the rider's last known position, which the hub is already
+    tracking. Asking them to re-send it would be the kind of friction that
+    stops a courier using the thing at all.
+    """
+    origin = _last_known_location(message.from_number)
+    if origin is None:
+        await _safe_graph_call(
+            graph_client.send_text(
+                message.from_number,
+                "I don't know where you are yet — share your location first, "
+                "then send your destination as `to <lat>,<lon>`.",
+            ),
+            "route origin prompt",
+        )
+        return
+
+    await _safe_graph_call(
+        graph_client.send_text(
+            message.from_number, "🧭 Comparing routes for heat exposure — one moment…"
+        ),
+        "route acknowledgement",
+    )
+
+    comparison = await asyncio.to_thread(compare_routes, origin, destination)
+
+    if comparison is None:
+        await _safe_graph_call(
+            graph_client.send_text(
+                message.from_number,
+                "I couldn't find a route between those two points. Check the "
+                "coordinates and try again.",
+            ),
+            "route failure",
+        )
+        return
+
+    log.info(
+        "Route request %s -> %.5f,%.5f: %s",
+        message.from_number, destination.latitude, destination.longitude,
+        comparison.reason,
+    )
+
+    hub.publish(Event(
+        kind="route",
+        text=(
+            f"Rider {_display_id(message.from_number)} requested a route. "
+            + (f"Cooler option found — {comparison.reason}."
+               if comparison.worth_detour else
+               f"Direct route is already coolest ({comparison.reason}).")
+        ),
+        status="warning" if comparison.worth_detour else "info",
+        rider_id=_display_id(message.from_number),
+    ))
+
+    await _safe_graph_call(
+        graph_client.send_text(message.from_number, comparison.to_whatsapp_text()),
+        "route comparison",
+    )
+
+
+def _display_id(from_number: str) -> str:
+    return from_number if settings.dashboard_unmask else mask_number(from_number)
+
+
+def _last_known_location(from_number: str) -> RiderLocation | None:
+    """The rider's most recent position, from the dashboard hub's registry."""
+    rider_id = _display_id(from_number)
+    for rider in hub.riders():
+        if rider["rider_id"] == rider_id:
+            return RiderLocation(rider["latitude"], rider["longitude"])
+    return None
 
 
 async def _trigger_rest_protocol(

@@ -60,6 +60,23 @@ dispatcher sees the fleet in real time.
 > • Watch for heat stroke: confusion, dry skin, no sweating, nausea. If any of those appear, call emergency services.
 > • Tell your dispatcher or a friend where you are.
 
+### Asking for a cooler route
+
+Reply with a destination and the service compares candidate paths by
+**cumulative heat exposure** rather than distance:
+
+> 🧭 **Cooler route found**
+>
+> Direct: 8.0 km, 30 min, peak 44.2 °C
+> Cooler: 11.0 km, 40 min, peak 30.2 °C
+>
+> About 10 min longer, but roughly **6.0 fewer °C-hours** of high heat.
+
+Routes are scored in **degree-hours above the high-heat line** — the area under
+the curve, not the peak. A route touching 41 °C for thirty seconds is safer than
+one sitting at 37 °C for twenty minutes, and only cumulative exposure sees that.
+A detour more than 1.6× the fastest duration is never offered, however cool.
+
 ---
 
 ## Safety bands
@@ -68,7 +85,7 @@ dispatcher sees the fleet in real time.
 |---|---|---|
 | 🟢 **Safe** | under 35 °C | Ride normally. No message clutter. |
 | 🟡 **Warning** | 35 – 40 °C | Hydration protocol, shade breaks, timing advice. |
-| 🔴 **Danger** | 40 °C and above | Automated rest protocol. Cooler re-routing *(see [Limits](#limits))*. |
+| 🔴 **Danger** | 40 °C and above | Automated rest protocol, and an offer to find a cooler route. |
 
 Bands are half-open (`35.0 ≤ t < 40.0`), so they partition the line with no gap
 — a rider at 39.6 °C lands in Warning rather than falling through to Safe. A
@@ -221,6 +238,7 @@ safety_rider/
 ├── rider_status.py          evaluateRiderSafetyStatus — the bands and protocols.
 ├── heat_layer.py            AOI construction, per-(cell, date) caching, tile lookup.
 ├── heat_risk.py             NOAA/OSHA-threshold engine + heat-index correction.
+├── routing.py               Candidate routes from OSRM, scored by heat exposure.
 ├── events.py                Fan-out hub and rider registry for the dashboard.
 ├── config.py                Every setting, with the reasoning for each default.
 ├── whatsapp/
@@ -251,9 +269,10 @@ python tests/test_whatsapp_webhook.py   # 31 checks
 python tests/test_heat_risk_live.py     # 28 checks
 python tests/test_rider_status.py       # 57 checks
 python tests/test_dashboard.py          # 44 checks
+python tests/test_routing.py            # 31 checks
 ```
 
-**160 checks**, no pytest required, all exit non-zero on failure.
+**191 checks**, no pytest required, all exit non-zero on failure.
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
 base URL points at an unroutable address, a `FakeClient` raises if the code
@@ -270,10 +289,10 @@ Stated plainly, because a safety tool that overstates itself is worse than none.
   get a clear "outside coverage" reply rather than a guess.
 - **Last complete day, not a forecast.** See [finding 1](#1-today-is-a-trap).
   The reply always names the date its figures come from.
-- **Cooler re-routing is not implemented.** The Danger protocol says what it can
-  honestly say rather than promising a re-route that will not arrive. The route
-  comparison (fetch candidates from OSRM, score each against the exceedance
-  layer) is the next piece of work.
+- **Route comparison depends on the public OSRM demo server**, which is
+  rate-limited, has no uptime guarantee, and returns no alternatives — so
+  candidates are generated here by routing via offset waypoints. Run your own
+  OSRM instance before anyone depends on this.
 - **Single process.** The event hub and the message-dedup cache are both
   in-memory. Running more than one worker silently splits riders between them;
   both need Redis before scaling out.
