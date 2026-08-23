@@ -112,8 +112,23 @@ class Settings:
     #: every tile, while a complete August day at the same location peaks at
     #: 36–37 °C. A rider asking at 08:00 would be told "clear to ride" on a day
     #: that goes on to hit 36 °C — so we measure the last COMPLETE day instead.
+    #: Two, not one. Measured 2026-08-23: yesterday's layer was still being
+    #: ingested and came back as a single hour, while the day before was
+    #: complete. Starting at 1 costs a wasted heatmap request before the
+    #: partial-day check steps back, and heatmaps are billed per request.
     heat_days_back: int = field(
-        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_DAYS_BACK") or 1))
+        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_DAYS_BACK") or 2))
+    )
+
+    #: How many further days back to try when a day comes back partial.
+    #: FortyGuard ingests a day some time after it ends, and an un-ingested day
+    #: does not error — it returns one hour's snapshot with min == mean == max,
+    #: which reads as a cool, safe day and is the single most dangerous wrong
+    #: answer this service can give. Measured 2026-08-23: 1 day back was still
+    #: partial, 7 days back was complete. Each step costs one heatmap request,
+    #: so keep this small.
+    heat_backfill_days: int = field(
+        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_BACKFILL_DAYS") or 6))
     )
 
     #: Poll budget in seconds for one FortyGuard task. The client defaults to

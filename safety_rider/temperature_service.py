@@ -28,6 +28,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any
 
 from fortyguard import FortyGuardClient
 from fortyguard.exceptions import FortyGuardError
@@ -179,14 +180,55 @@ getHyperlocalTemperature = get_hyperlocal_temperature  # noqa: N816
 
 
 def _live_reading(latitude: float, longitude: float) -> TemperatureReading:
-    """Read the rider's tile out of the cached FortyGuard layers."""
+    """Read the rider's tile out of the cached FortyGuard layers.
+
+    Walks backwards from ``heat_days_back`` until it finds a day the API has
+    finished ingesting. See :func:`_read_day` for why a partial day cannot be
+    used and does not announce itself as an error.
+    """
     from .heat_risk import OSHA_HIGH_C  # local import: heat_risk imports us back
 
     client = FortyGuardClient()
-    study_date = (date.today() - timedelta(days=settings.heat_days_back)).isoformat()
+    today = date.today()
 
+    for step in range(settings.heat_backfill_days):
+        study_date = (today - timedelta(days=settings.heat_days_back + step)).isoformat()
+        reading = _read_day(client, latitude, longitude, study_date, OSHA_HIGH_C)
+        if reading is not None:
+            if step:
+                log.info("Used %s — the %d more recent day(s) were still partial.",
+                         study_date, step)
+            return reading
+        log.info("Day %s came back partial (single hour, no diurnal range) — "
+                 "stepping back one day.", study_date)
+
+    raise ValueError(
+        f"No complete day found in the {settings.heat_backfill_days} days before "
+        f"{(today - timedelta(days=settings.heat_days_back)).isoformat()}."
+    )
+
+
+def _read_day(
+    client: Any,
+    latitude: float,
+    longitude: float,
+    study_date: str,
+    threshold_c: float,
+) -> TemperatureReading | None:
+    """One day's reading, or ``None`` if the API has not finished ingesting it.
+
+    A day the catalog has not yet completed comes back looking like a success:
+    ``filter_type=3`` should return each tile's daily min / mean / max, but for
+    a partial day all three carry the same number — the one hour that exists.
+    Measured on this AOI: a complete day spans 16.07 / 20.70 / 30.10 °C, while
+    a partial one reads 15.89 / 15.89 / 15.89 across all 9,968 tiles.
+
+    Passing that through would report a cool, flat, apparently safe day. It is
+    the worst failure available to this service, and it arrives with no error
+    attached, so it has to be recognised by shape.
+    """
     tcm_layer, exceedance_layer = heat_layer.fetch_layers(
-        client, latitude, longitude, study_date=study_date, threshold_c=OSHA_HIGH_C,
+        client, latitude, longitude, study_date=study_date, threshold_c=threshold_c,
     )
 
     tile = tcm_layer.lookup(latitude, longitude)
@@ -200,14 +242,17 @@ def _live_reading(latitude: float, longitude: float) -> TemperatureReading:
     if peak is None:
         raise ValueError("Heat tile carried no max_temperature.")
 
+    low = tile.get("min_temperature")
+    mean = tile.get("average_temperature")
+
+    if low is not None and abs(float(peak) - float(low)) < 0.01:
+        return None  # partial day — see the docstring.
+
     hours_above: float | None = None
     if exceedance_layer is not None:
         exceedance_tile = exceedance_layer.lookup(latitude, longitude)
         if exceedance_tile and exceedance_tile.get("value") is not None:
             hours_above = float(exceedance_tile["value"])
-
-    mean = tile.get("average_temperature")
-    low = tile.get("min_temperature")
 
     return TemperatureReading(
         celsius=round(float(peak), 2),

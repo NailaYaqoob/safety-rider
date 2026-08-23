@@ -117,6 +117,20 @@ A rider checking at 08:00 would be told **"🟢 Clear to ride"** on a day that g
 on to hit 36 °C. Safety Rider therefore measures the **last complete day** and
 names that date in every reply.
 
+"Complete" has to be checked, not assumed. Ingestion lags the calendar, and a
+day that is still arriving does not return an error — it returns one hour's
+snapshot in which every tile reads the same number:
+
+| Day requested (on 2026-08-23) | min / mean / peak | Verdict |
+|---|---|---|
+| 2026-08-22 (yesterday) | 15.89 / 15.89 / **15.89** | partial — flat across all 9,968 tiles |
+| 2026-08-21 | 15.87 / 19.25 / **25.52** | complete |
+| 2026-08-16 | 16.07 / 20.70 / **30.10** | complete |
+
+A collapsed min == mean == max is the only signal that the day is unfinished, so
+the service tests for it and walks back a day at a time until a real diurnal
+range appears.
+
 ### 2. The heat index peaks at 4 a.m.
 
 `env_params` applies a single temperature anchor across all 24 hours and varies
@@ -277,12 +291,12 @@ with no API traffic.
 ```bash
 python tests/test_whatsapp_webhook.py   # 31 checks
 python tests/test_heat_risk_live.py     # 28 checks
-python tests/test_rider_status.py       # 69 checks
+python tests/test_rider_status.py       # 79 checks
 python tests/test_dashboard.py          # 44 checks
 python tests/test_routing.py            # 31 checks
 ```
 
-**203 checks**, no pytest required, all exit non-zero on failure.
+**213 checks**, no pytest required, all exit non-zero on failure.
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
 base URL points at an unroutable address, a `FakeClient` raises if the code

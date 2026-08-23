@@ -261,6 +261,61 @@ os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "1"
 os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
 importlib.reload(cfg); tsvc.settings = cfg.settings
 
+print("\n[12] A partial day is detected and stepped over, never reported")
+# FortyGuard returns a not-yet-ingested day as a success: one hour's snapshot
+# with min == mean == max. Reporting it hands the rider a cool, flat, safe
+# looking day. Only the shape gives it away, so assert on the shape.
+class _FakeLayer:
+    def __init__(self, tile): self._tile = tile
+    def lookup(self, lat, lon): return self._tile
+
+PARTIAL = {"min_temperature": 15.89, "average_temperature": 15.89, "max_temperature": 15.89}
+COMPLETE = {"min_temperature": 15.87, "average_temperature": 19.25, "max_temperature": 25.52}
+
+asked = []
+def _fake_fetch(client, lat, lon, study_date=None, threshold_c=0.0):
+    asked.append(study_date)
+    tile = COMPLETE if len(asked) >= 3 else PARTIAL
+    return _FakeLayer(tile), None
+
+os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "0"
+os.environ["SAFETY_RIDER_LIVE_HEAT"] = "1"
+os.environ["FORTYGUARD_API_KEY"] = "test-key-never-sent"
+importlib.reload(cfg); tsvc.settings = cfg.settings
+
+_real_fetch = tsvc.heat_layer.fetch_layers
+_real_client = tsvc.FortyGuardClient
+tsvc.heat_layer.fetch_layers = _fake_fetch
+tsvc.FortyGuardClient = lambda *a, **k: object()
+try:
+    stepped = tsvc.get_hyperlocal_temperature(37.3318, -121.8899)
+    check("partial days are skipped (3 dates tried)", len(asked) == 3)
+    check("dates walk backwards one day at a time",
+          asked == sorted(asked, reverse=True) and len(set(asked)) == 3)
+    check("step-back returns a live reading", stepped.source == "live")
+    check("reported peak is the complete day's", stepped.celsius == 25.52)
+    check("reported date is the complete day's", stepped.observed_date == asked[-1])
+    check("a partial day's flat value is never reported", stepped.celsius != 15.89)
+
+    # Every day partial -> fall back to simulation, not a flat 15.89 "safe".
+    asked.clear()
+    def _all_partial(client, lat, lon, study_date=None, threshold_c=0.0):
+        asked.append(study_date)
+        return _FakeLayer(PARTIAL), None
+    tsvc.heat_layer.fetch_layers = _all_partial
+    exhausted = tsvc.get_hyperlocal_temperature(37.3318, -121.8899)
+    check("exhausting the backfill window does not raise", exhausted is not None)
+    check("exhausted window never reports the partial value",
+          exhausted.celsius != 15.89)
+    check("exhausted window is not labelled live", exhausted.source != "live")
+    check("backfill window is bounded", len(asked) == cfg.settings.heat_backfill_days)
+finally:
+    tsvc.heat_layer.fetch_layers = _real_fetch
+    tsvc.FortyGuardClient = _real_client
+    os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "1"
+    os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
+    importlib.reload(cfg); tsvc.settings = cfg.settings
+
 print("\n--- sample Danger reply ---")
 os.environ["SAFETY_RIDER_MOCK_TEMP_C"] = "41.5"
 importlib.reload(cfg); tsvc.settings = cfg.settings
