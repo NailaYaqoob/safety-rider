@@ -71,6 +71,11 @@ class TemperatureReading:
     resolution_m: int | None = None
     #: Populated only when :attr:`source` is ``unavailable``.
     error: str | None = None
+    #: True when retrying cannot help — the location is outside coverage, not
+    #: the API having a bad minute. Drives whether the rider is told to try
+    #: again, because telling them to retry something that can never work is
+    #: how a safety bot trains people to stop reading it.
+    permanent: bool = False
     #: Why this reading was simulated rather than measured. Diagnostic only —
     #: it is the difference between "demo switch is on" and "the API 500ed",
     #: which look identical from the outside.
@@ -96,7 +101,7 @@ class TemperatureReading:
     def describe(self) -> str:
         """One line of provenance, safe to show a rider."""
         if not self.ok:
-            return "no temperature data available for this location"
+            return self.error or "no temperature data available for this location"
         where = f"{self.resolution_m} m tile" if self.resolution_m else "simulated tile"
         when = self.observed_date or "recent data"
         label = "measured" if self.is_live else "SIMULATED"
@@ -118,7 +123,8 @@ def get_hyperlocal_temperature(
 
     1. ``force_mock=True``, or ``SAFETY_RIDER_MOCK_TEMPERATURE=1`` → simulated.
     2. Live disabled (``SAFETY_RIDER_LIVE_HEAT=0``) or no API key → simulated.
-    3. Outside U.S. coverage → simulated, flagged as such.
+    3. Outside U.S. coverage → unavailable. No verdict is invented for ground
+       the data cannot see.
     4. Otherwise → FortyGuard, served from the shared per-(grid cell, date)
        cache so riders a few blocks apart cost one API call between them.
 
@@ -142,7 +148,19 @@ def get_hyperlocal_temperature(
 
     if not heat_layer.is_in_coverage(latitude, longitude):
         # Bail before spending a request: the API is U.S.-only and would fail.
-        return _mock_reading(latitude, longitude, why="outside U.S. coverage")
+        # Say so rather than simulating. A rider standing outside coverage must
+        # not be handed a confident band for the street they are actually on —
+        # an invented "Safe" is the one failure this service cannot afford, and
+        # an invented "Warning" teaches them to ignore the real ones.
+        return TemperatureReading(
+            celsius=float("nan"), latitude=latitude, longitude=longitude,
+            source=SOURCE_UNAVAILABLE,
+            permanent=True,
+            error=(
+                "it's outside the United States, and FortyGuard's temperature "
+                "data covers the U.S. only"
+            ),
+        )
 
     try:
         return _live_reading(latitude, longitude)

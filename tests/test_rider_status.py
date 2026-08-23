@@ -220,6 +220,47 @@ check(f"same wamid twice -> no extra sends ({first} then {len(SENT)})",
       len(SENT) == first and first > 0)
 graph_client.send_text = _real_send
 
+print("\n[11] Outside U.S. coverage is reported, never simulated")
+# Mock mode short-circuits before the coverage check, so turn it off and give
+# config a key. Out-of-coverage bails before any network call, so this stays
+# offline: a live lookup would need an in-coverage point, which we never use.
+os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "0"
+os.environ["SAFETY_RIDER_LIVE_HEAT"] = "1"
+os.environ["FORTYGUARD_API_KEY"] = "test-key-never-sent"
+importlib.reload(cfg); tsvc.settings = cfg.settings
+
+abroad = get_hyperlocal_temperature(24.86, 67.00)          # Karachi
+check("outside coverage -> source 'unavailable'", abroad.source == "unavailable")
+check("outside coverage -> not ok", abroad.ok is False)
+check("outside coverage -> flagged permanent", abroad.permanent is True)
+check("outside coverage -> error explains why",
+      bool(abroad.error) and "United States" in abroad.error)
+
+abroad_status = evaluate_rider_safety_status(
+    abroad.celsius if abroad.ok else None,
+    hours_above_threshold=abroad.hours_above_threshold,
+)
+check("outside coverage -> UNKNOWN, not a band",
+      abroad_status.status is SafetyStatus.UNKNOWN)
+check("outside coverage -> no temperature invented",
+      abroad_status.temperature_c is None)
+check("outside coverage -> no rest protocol", abroad_status.rest_protocol is False)
+
+abroad_text = abroad_status.to_whatsapp_text(abroad)
+check("reply names the reason", "United States" in abroad_text)
+check("reply does not offer a pointless retry", "retry" not in abroad_text.lower())
+check("reply quotes no temperature", "°C" not in abroad_text)
+check("reply is not labelled SIMULATED", "SIMULATED" not in abroad_text)
+
+# A transient failure still gets the retry, which is the distinction the
+# `permanent` flag exists to make.
+transient = evaluate_rider_safety_status(None).to_whatsapp_text()
+check("transient failure still offers a retry", "retry" in transient.lower())
+
+os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "1"
+os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
+importlib.reload(cfg); tsvc.settings = cfg.settings
+
 print("\n--- sample Danger reply ---")
 os.environ["SAFETY_RIDER_MOCK_TEMP_C"] = "41.5"
 importlib.reload(cfg); tsvc.settings = cfg.settings

@@ -277,12 +277,12 @@ with no API traffic.
 ```bash
 python tests/test_whatsapp_webhook.py   # 31 checks
 python tests/test_heat_risk_live.py     # 28 checks
-python tests/test_rider_status.py       # 57 checks
+python tests/test_rider_status.py       # 69 checks
 python tests/test_dashboard.py          # 44 checks
 python tests/test_routing.py            # 31 checks
 ```
 
-**191 checks**, no pytest required, all exit non-zero on failure.
+**203 checks**, no pytest required, all exit non-zero on failure.
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
 base URL points at an unroutable address, a `FakeClient` raises if the code

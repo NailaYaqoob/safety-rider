@@ -41,6 +41,10 @@ DANGER_THRESHOLD_C = 40.0    # at/above this: rest protocol + re-routing
 #: Sustained exposure that promotes an otherwise-Safe reading to Warning. Four
 #: hours above the OSHA high-heat line is a harder day than twenty minutes at a
 #: higher peak, and a peak-only reading cannot see the difference.
+#: Offered when a reading failed but might succeed later. Named so the
+#: renderer can drop it for permanent failures without matching prose.
+_RETRY_ACTION = "Send your location again in a few minutes and I'll retry."
+
 SUSTAINED_HOURS = 4.0
 #: Above this, a Warning day gets an extra "go early or go late" line. It does
 #: NOT promote to Danger — the 40 °C cutoff above is the spec and stays intact.
@@ -109,9 +113,16 @@ class RiderSafetyStatus:
         lines = [f"{_BADGE[self.status]} *{self.headline}*", ""]
 
         if self.temperature_c is None:
+            reason = getattr(reading, "error", None)
             lines.append(
-                "I couldn't get a temperature for that spot, so I can't tell you "
-                "whether it's safe. Treat it as unknown and carry water."
+                # The reason may already end in an abbreviation's full stop.
+                f"I can't check that spot — {reason.rstrip('.')}."
+                if reason
+                else "I couldn't get a temperature for that spot."
+            )
+            lines.append(
+                "So I can't tell you whether it's safe. Treat the heat as "
+                "unknown and carry water."
             )
         else:
             lines.append(
@@ -124,12 +135,18 @@ class RiderSafetyStatus:
                     "a day above the high-heat line."
                 )
 
-        if self.actions:
+        actions = self.actions
+        if getattr(reading, "permanent", False):
+            # Nothing about this location will change on a retry.
+            actions = [a for a in actions if a != _RETRY_ACTION]
+        if actions:
             lines.append("")
-            lines.extend(f"• {action}" for action in self.actions)
+            lines.extend(f"• {action}" for action in actions)
 
+        # Suppressed when there is no reading: the body has already given the
+        # reason, and repeating it as provenance reads like a second failure.
         provenance = getattr(reading, "describe", None)
-        if callable(provenance):
+        if callable(provenance) and self.temperature_c is not None:
             lines.append("")
             lines.append(f"_{provenance()}_")
 
@@ -162,7 +179,7 @@ def evaluate_rider_safety_status(
             headline=_HEADLINE[SafetyStatus.UNKNOWN],
             actions=[
                 "Carry water and assume it is hotter than it looks.",
-                "Send your location again in a few minutes and I'll retry.",
+                _RETRY_ACTION,
             ],
             reason="no usable temperature value",
             hours_above_threshold=hours_above_threshold,
