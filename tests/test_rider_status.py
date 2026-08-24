@@ -316,6 +316,97 @@ finally:
     os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
     importlib.reload(cfg); tsvc.settings = cfg.settings
 
+print("\n[13] The nowcast decides the band; the day still describes the block")
+# filter_type=1 returns ONE hour, so min == average == max by construction.
+# That is the exact shape [12] rejects as a partial day -- if that check ever
+# leaks into the hourly path, every valid nowcast is thrown away.
+HOURLY = {"min_temperature": 30.9, "average_temperature": 30.9, "max_temperature": 30.9}
+
+os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "0"
+os.environ["SAFETY_RIDER_LIVE_HEAT"] = "1"
+os.environ["FORTYGUARD_API_KEY"] = "test-key-never-sent"
+importlib.reload(cfg); tsvc.settings = cfg.settings
+
+_real_fetch = tsvc.heat_layer.fetch_layers
+_real_hourly = tsvc.heat_layer.fetch_hourly_tcm
+_real_client = tsvc.FortyGuardClient
+
+def _one_complete_day(client, lat, lon, study_date=None, threshold_c=0.0):
+    return _FakeLayer({"min_temperature": 24.1, "average_temperature": 31.0,
+                       "max_temperature": 41.2}), _FakeLayer({"value": 10.0})
+
+hours_asked = []
+def _hourly_ok(client, lat, lon, study_date=None, hour=0):
+    hours_asked.append((study_date, hour))
+    return _FakeLayer(HOURLY)
+
+def _hourly_none(client, lat, lon, study_date=None, hour=0):
+    hours_asked.append((study_date, hour))
+    return None            # hour not ingested -- the empty-layer case
+
+tsvc.heat_layer.fetch_layers = _one_complete_day
+tsvc.FortyGuardClient = lambda *a, **k: object()
+try:
+    tsvc.heat_layer.fetch_hourly_tcm = _hourly_ok
+    r = tsvc.get_hyperlocal_temperature(37.3318, -121.8899)
+    check("a flat hourly tile is NOT mistaken for a partial day",
+          r.now_celsius == 30.9)
+    check("the nowcast is timestamped", bool(r.now_observed_at))
+    check("the daily peak is kept, not overwritten", r.celsius == 41.2)
+    check("duration survives from the daily layer", r.hours_above_threshold == 10.0)
+    check("the band decides on now, not the daily peak",
+          r.decision_celsius == 30.9)
+
+    st = evaluate_rider_safety_status(
+        r.decision_celsius, hours_above_threshold=r.hours_above_threshold)
+    text = st.to_whatsapp_text(r)
+    check("reply says 'Right now', not 'Peak'",
+          "Right now where you are" in text and "Peak air temperature" not in text)
+    check("reply quotes the nowcast value", "30.9 °C" in text)
+    check("41.2 is never shown as the current temperature", "41.2 °C" not in text)
+    check("the duration line names its own (older) date",
+          "a day above the high-heat line (measured" in text)
+    check("provenance carries both timestamps",
+          "now " in r.describe() and "duration " in r.describe())
+    check("sustained hours still promote a sub-35 reading",
+          st.status is SafetyStatus.WARNING)
+
+    # A nowcast that cannot be had must cost nothing.
+    hours_asked.clear()
+    tsvc.heat_layer.fetch_hourly_tcm = _hourly_none
+    degraded = tsvc.get_hyperlocal_temperature(37.3318, -121.8899)
+    check("an unavailable hour never invents one", degraded.now_celsius is None)
+    check("the daily reading survives a failed nowcast", degraded.celsius == 41.2)
+    check("it falls back to the daily peak for the band",
+          degraded.decision_celsius == 41.2)
+    check("the reply reverts to peak wording",
+          "Peak air temperature" in evaluate_rider_safety_status(
+              degraded.decision_celsius).to_whatsapp_text(degraded))
+    check("hour lookback is bounded",
+          len(hours_asked) == cfg.settings.nowcast_lookback_hours)
+    check("hours walk backwards from now",
+          [h for _, h in hours_asked] == sorted((h for _, h in hours_asked), reverse=True)
+          or len(hours_asked) == 1)
+
+    # The switch must actually switch it off -- it is a billed request per hour.
+    hours_asked.clear()
+    os.environ["SAFETY_RIDER_NOWCAST"] = "0"
+    importlib.reload(cfg); tsvc.settings = cfg.settings
+    tsvc.heat_layer.fetch_hourly_tcm = _hourly_ok
+    off = tsvc.get_hyperlocal_temperature(37.3318, -121.8899)
+    check("SAFETY_RIDER_NOWCAST=0 spends no hourly request", hours_asked == [])
+    check("with the nowcast off the band is the daily peak",
+          off.now_celsius is None and off.decision_celsius == 41.2)
+finally:
+    tsvc.heat_layer.fetch_layers = _real_fetch
+    tsvc.heat_layer.fetch_hourly_tcm = _real_hourly
+    tsvc.FortyGuardClient = _real_client
+    os.environ.pop("SAFETY_RIDER_NOWCAST", None)
+    os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "1"
+    os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
+    importlib.reload(cfg); tsvc.settings = cfg.settings
+
+
 print("\n--- sample Danger reply ---")
 os.environ["SAFETY_RIDER_MOCK_TEMP_C"] = "41.5"
 importlib.reload(cfg); tsvc.settings = cfg.settings

@@ -125,14 +125,25 @@ class RiderSafetyStatus:
                 "unknown and carry water."
             )
         else:
+            # With a nowcast the headline number is the current hour, not the
+            # day's peak. Calling it a peak would misdescribe it by several
+            # degrees in either direction, so the wording follows the source.
+            now_c = getattr(reading, "now_celsius", None)
             lines.append(
-                f"Peak air temperature where you are: *{self.temperature_c:.1f} °C* "
-                f"({self.fahrenheit:.0f} °F)."
+                (f"Right now where you are: *{self.temperature_c:.1f} °C* "
+                 f"({self.fahrenheit:.0f} °F).")
+                if now_c is not None else
+                (f"Peak air temperature where you are: *{self.temperature_c:.1f} °C* "
+                 f"({self.fahrenheit:.0f} °F).")
             )
             if self.hours_above_threshold is not None and self.hours_above_threshold >= 1:
+                # Duration comes from a complete day, which is not the day the
+                # nowcast describes. Name it, or the two blur into one claim.
+                when = getattr(reading, "observed_date", None)
+                dated = f" (measured {when})" if when and now_c is not None else ""
                 lines.append(
                     f"That spot spends about *{self.hours_above_threshold:.0f} hours* "
-                    "a day above the high-heat line."
+                    f"a day above the high-heat line{dated}."
                 )
 
         actions = self.actions

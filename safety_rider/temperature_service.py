@@ -26,8 +26,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from dataclasses import dataclass
-from datetime import date, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fortyguard import FortyGuardClient
@@ -70,6 +70,13 @@ class TemperatureReading:
     hours_above_threshold: float | None = None
     #: Tile edge length in metres for a live reading.
     resolution_m: int | None = None
+    #: What it is at this tile *right now* — the current elapsed hour, not the
+    #: daily peak above. None when the nowcast is disabled or that hour has not
+    #: been ingested yet. This is a nowcast and never a forecast: the API
+    #: returns an empty layer for hours that have not happened.
+    now_celsius: float | None = None
+    #: UTC hour the nowcast describes, as ``"2026-08-24 12:00 UTC"``.
+    now_observed_at: str | None = None
     #: Populated only when :attr:`source` is ``unavailable``.
     error: str | None = None
     #: True when retrying cannot help — the location is outside coverage, not
@@ -92,6 +99,23 @@ class TemperatureReading:
         return self.source == SOURCE_LIVE
 
     @property
+    def decision_celsius(self) -> float:
+        """The temperature the safety band should be decided on.
+
+        The nowcast when there is one, because a rider standing on the street
+        is asking what it is *now*, and the daily peak below it comes from an
+        older day — using that to warn about today would be warning from stale
+        data. Falls back to the peak so a failed nowcast never costs a verdict.
+
+        The daily figures are not discarded: :attr:`hours_above_threshold` still
+        characterises the block, and still drives the sustained-exposure
+        promotion. Now decides the band; the day describes the ground.
+        """
+        if self.now_celsius is not None and math.isfinite(self.now_celsius):
+            return self.now_celsius
+        return self.celsius
+
+    @property
     def fahrenheit(self) -> float:
         return self.celsius * 9 / 5 + 32
 
@@ -106,6 +130,10 @@ class TemperatureReading:
         where = f"{self.resolution_m} m tile" if self.resolution_m else "simulated tile"
         when = self.observed_date or "recent data"
         label = "measured" if self.is_live else "SIMULATED"
+        if self.now_celsius is not None and self.now_observed_at:
+            # Two sources, two timestamps. Collapsing them into one date would
+            # date the live number to the older day, or the reverse.
+            return f"{label}, {where} — now {self.now_observed_at}, duration {when}"
         return f"{label}, {where}, {when}"
 
 
@@ -198,7 +226,7 @@ def _live_reading(latitude: float, longitude: float) -> TemperatureReading:
             if step:
                 log.info("Used %s — the %d more recent day(s) were still partial.",
                          study_date, step)
-            return reading
+            return _with_nowcast(client, reading)
         log.info("Day %s came back partial (single hour, no diurnal range) — "
                  "stepping back one day.", study_date)
 
@@ -265,6 +293,44 @@ def _read_day(
         hours_above_threshold=round(hours_above, 1) if hours_above is not None else None,
         resolution_m=settings.heat_granularity_m,
     )
+
+
+def _with_nowcast(client: Any, reading: TemperatureReading) -> TemperatureReading:
+    """Attach the current hour's temperature to a daily reading.
+
+    Purely additive. The daily reading is already a valid answer, so every
+    failure here — disabled, not yet ingested, API down — returns it untouched
+    rather than costing the rider a verdict.
+    """
+    if not settings.nowcast:
+        return reading
+
+    now = datetime.now(tz=timezone.utc)
+    for back in range(settings.nowcast_lookback_hours):
+        moment = now - timedelta(hours=back)
+        layer = heat_layer.fetch_hourly_tcm(
+            client, reading.latitude, reading.longitude,
+            study_date=moment.date().isoformat(), hour=moment.hour,
+        )
+        if layer is None:
+            continue
+
+        tile = layer.lookup(reading.latitude, reading.longitude)
+        # For a single hour min == average == max, so any of them is the hour's
+        # temperature. max is read for consistency with the daily path.
+        value = tile.get("max_temperature") if tile else None
+        if value is None:
+            continue
+
+        return replace(
+            reading,
+            now_celsius=round(float(value), 2),
+            now_observed_at=moment.strftime("%Y-%m-%d %H:00 UTC"),
+        )
+
+    log.info("No ingested hour found in the last %d — daily reading only.",
+             settings.nowcast_lookback_hours)
+    return reading
 
 
 # ──────────────────────────────────────────────────────────────── mock path

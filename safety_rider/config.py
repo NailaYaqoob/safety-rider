@@ -120,6 +120,26 @@ class Settings:
         default_factory=lambda: max(1, int(_env("SAFETY_RIDER_DAYS_BACK") or 2))
     )
 
+    #: Fetch the current hour's layer alongside the daily one, so the rider is
+    #: told what it is *now* rather than only what the last complete day peaked
+    #: at. Measured 2026-08-24: the current hour returns real data; six hours
+    #: ahead returns an empty layer, so this is a nowcast, never a forecast.
+    #:
+    #: Costs one extra billed request per (grid cell, hour). Cached per hour, so
+    #: a whole fleet in one cell in one hour pays once — but a 12-hour shift is
+    #: still up to 12 requests per cell per day on top of the 2 daily ones. Set
+    #: SAFETY_RIDER_NOWCAST=0 to fall back to daily-only.
+    nowcast: bool = field(
+        default_factory=lambda: (_env("SAFETY_RIDER_NOWCAST") or "1").lower()
+        not in {"0", "false", "no"}
+    )
+
+    #: How many hours to step back when the current hour is not yet ingested.
+    #: Each step is another billed request, so keep it small.
+    nowcast_lookback_hours: int = field(
+        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_NOWCAST_LOOKBACK") or 3))
+    )
+
     #: How many further days back to try when a day comes back partial.
     #: FortyGuard ingests a day some time after it ends, and an un-ingested day
     #: does not error — it returns one hour's snapshot with min == mean == max,

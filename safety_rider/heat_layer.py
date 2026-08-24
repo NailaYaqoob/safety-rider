@@ -282,3 +282,47 @@ def fetch_layers(
         log.warning("Exceedance layer unavailable (%s) — continuing without it.", exc)
 
     return tcm_layer, exceedance_layer
+
+
+def fetch_hourly_tcm(
+    client: Any,
+    latitude: float,
+    longitude: float,
+    study_date: str,
+    hour: int,
+) -> HeatLayer | None:
+    """The ``tcm`` layer for a single elapsed hour, or ``None`` if it has none.
+
+    ``filter_type=1`` returns one temperature per tile for one hour, so each
+    tile's ``min``/``average``/``max`` are the same number by construction. That
+    is *not* the partial-day signature :func:`_read_day` screens for — do not
+    reuse that check here or every valid hour is rejected.
+
+    An hour the catalog has not reached comes back as a well-formed but **empty**
+    FeatureCollection rather than an error. Measured 2026-08-24 at 12:47 UTC:
+    ``12:00`` returned 360 tiles spanning 28.73-30.93 °C, while ``18:00`` six
+    hours ahead returned ``{"features": []}`` with ``n_cells: 0`` and no error
+    attached. So emptiness is the signal, and it has to be caught by shape.
+    """
+    cell_lat, cell_lon = grid_key(latitude, longitude)
+    aoi = build_aoi(cell_lat, cell_lon, settings.heat_aoi_half_side_m)
+    slug = f"rider_{cell_lat:.5f}_{cell_lon:.5f}_{study_date}_{hour:02d}00"
+
+    try:
+        response = cached_or_live(
+            cache_dir() / f"heatmap_{slug}_tcm.json",
+            f"hourly tcm heatmap {study_date} {hour:02d}:00",
+            getattr(client, "create_heatmap", None) if client else None,
+            polygon_aoi=aoi,
+            start_date=study_date,
+            start_time=f"{hour:02d}:00",
+            filter_type=1,
+            granularity=settings.heat_granularity_m,
+            analytic_type="tcm",
+            verbose=False,
+            timeout=settings.heat_timeout_s,
+        )
+        return HeatLayer.from_response(response)
+    except Exception as exc:  # noqa: BLE001 — the nowcast is an enhancement
+        log.info("Hourly layer %s %02d:00 unavailable (%s).", study_date, hour, exc)
+        return None

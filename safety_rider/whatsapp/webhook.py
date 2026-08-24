@@ -226,8 +226,10 @@ async def _evaluate_and_reply(message: InboundMessage, location: RiderLocation) 
         get_hyperlocal_temperature, location.latitude, location.longitude
     )
 
+    # decision_celsius is the current hour when the nowcast landed, the daily
+    # peak otherwise — a rider on the street is asking what it is now.
     status = evaluate_rider_safety_status(
-        reading.celsius if reading.ok else None,
+        reading.decision_celsius if reading.ok else None,
         hours_above_threshold=reading.hours_above_threshold,
     )
 
@@ -236,7 +238,7 @@ async def _evaluate_and_reply(message: InboundMessage, location: RiderLocation) 
         message.from_number,
         location.latitude,
         location.longitude,
-        reading.celsius if reading.ok else float("nan"),
+        reading.decision_celsius if reading.ok else float("nan"),
         reading.source,
         status.status.value,
     )
