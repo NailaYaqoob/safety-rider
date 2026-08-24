@@ -292,6 +292,7 @@ def fetch_hourly_tcm(
     hour: int,
     *,
     cache_only: bool = True,
+    timeout_s: float | None = None,
 ) -> HeatLayer | None:
     """The ``tcm`` layer for a single elapsed hour, or ``None`` if it has none.
 
@@ -314,6 +315,11 @@ def fetch_hourly_tcm(
     the cache out-of-band (see :mod:`safety_rider.warm`) is what makes the
     nowcast affordable and fast; on the rider path a cold cell simply has no
     nowcast, and the daily reading answers.
+
+    ``timeout_s`` defaults to the rider-path budget, which is deliberately short.
+    A caller that submits (``cache_only=False``) must raise it, because a timeout
+    there is not a cheap failure: the job is billed at submission and abandoning
+    the poll discards a paid-for answer. See ``settings.heat_warm_timeout_s``.
     """
     cell_lat, cell_lon = grid_key(latitude, longitude)
     aoi = build_aoi(cell_lat, cell_lon, settings.heat_aoi_half_side_m)
@@ -334,7 +340,7 @@ def fetch_hourly_tcm(
             granularity=settings.heat_granularity_m,
             analytic_type="tcm",
             verbose=False,
-            timeout=settings.heat_timeout_s,
+            timeout=settings.heat_timeout_s if timeout_s is None else timeout_s,
         )
         return HeatLayer.from_response(response)
     except Exception as exc:  # noqa: BLE001 — the nowcast is an enhancement

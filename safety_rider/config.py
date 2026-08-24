@@ -160,6 +160,16 @@ class Settings:
         default_factory=lambda: float(_env("SAFETY_RIDER_HEAT_TIMEOUT_S") or 120)
     )
 
+    #: Poll budget for the out-of-band warmer, which is under no such pressure.
+    #: It has to be generous: the same request measured 219 s on 2026-08-24 at
+    #: 12:47 UTC and was still 'Processing' past 120 s at 15:43 the same day, so
+    #: queue depth — not tile count — sets the wait. Timing out here is the
+    #: expensive failure, because abandoning the poll does not cancel the billed
+    #: job; it only throws away the answer you already paid for.
+    heat_warm_timeout_s: float = field(
+        default_factory=lambda: float(_env("SAFETY_RIDER_HEAT_WARM_TIMEOUT_S") or 900)
+    )
+
     #: Set truthy to answer every temperature lookup from the deterministic
     #: simulator in :mod:`safety_rider.temperature_service` instead of the API.
     #: Distinct from SAFETY_RIDER_LIVE_HEAT, which disables the whole live path;
