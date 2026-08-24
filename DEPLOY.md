@@ -30,8 +30,12 @@ WHATSAPP_GRAPH_API_VERSION=v21.0
 SAFETY_RIDER_LIVE_HEAT=1
 SAFETY_RIDER_DAYS_BACK=2
 SAFETY_RIDER_BACKFILL_DAYS=6
-SAFETY_RIDER_NOWCAST=1            # current-hour reading; 0 = daily only
-SAFETY_RIDER_NOWCAST_LOOKBACK=3   # hours to step back if now is not ingested
+SAFETY_RIDER_NOWCAST=1            # use warmed current-hour layers; 0 = daily only
+SAFETY_RIDER_NOWCAST_LOOKBACK=3   # hours to step back if now is not warm (cache reads, free)
+#
+# The nowcast is never fetched on a rider's message — an hourly layer takes
+# ~4 minutes. Warm it out of band instead, one run per hour per service area:
+#   python -m safety_rider.warm <lat> <lon>
 SAFETY_RIDER_HEAT_TIMEOUT_S=120
 SAFETY_RIDER_DEBUG_PAYLOADS=0
 

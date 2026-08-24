@@ -336,13 +336,13 @@ def _one_complete_day(client, lat, lon, study_date=None, threshold_c=0.0):
                        "max_temperature": 41.2}), _FakeLayer({"value": 10.0})
 
 hours_asked = []
-def _hourly_ok(client, lat, lon, study_date=None, hour=0):
-    hours_asked.append((study_date, hour))
+def _hourly_ok(client, lat, lon, study_date=None, hour=0, cache_only=True):
+    hours_asked.append((study_date, hour, cache_only))
     return _FakeLayer(HOURLY)
 
-def _hourly_none(client, lat, lon, study_date=None, hour=0):
-    hours_asked.append((study_date, hour))
-    return None            # hour not ingested -- the empty-layer case
+def _hourly_none(client, lat, lon, study_date=None, hour=0, cache_only=True):
+    hours_asked.append((study_date, hour, cache_only))
+    return None            # cold cell -- nothing warm, nothing submitted
 
 tsvc.heat_layer.fetch_layers = _one_complete_day
 tsvc.FortyGuardClient = lambda *a, **k: object()
@@ -385,8 +385,13 @@ try:
     check("hour lookback is bounded",
           len(hours_asked) == cfg.settings.nowcast_lookback_hours)
     check("hours walk backwards from now",
-          [h for _, h in hours_asked] == sorted((h for _, h in hours_asked), reverse=True)
+          [h for _, h, _ in hours_asked] == sorted((h for _, h, _ in hours_asked),
+                                                   reverse=True)
           or len(hours_asked) == 1)
+    # The whole cost story rests on this: an hourly request takes ~4 minutes and
+    # a timeout bills anyway, so a rider message must never be able to submit one.
+    check("the rider path NEVER submits an hourly request",
+          all(cache_only is True for _, _, cache_only in hours_asked))
 
     # The switch must actually switch it off -- it is a billed request per hour.
     hours_asked.clear()

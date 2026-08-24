@@ -290,6 +290,8 @@ def fetch_hourly_tcm(
     longitude: float,
     study_date: str,
     hour: int,
+    *,
+    cache_only: bool = True,
 ) -> HeatLayer | None:
     """The ``tcm`` layer for a single elapsed hour, or ``None`` if it has none.
 
@@ -303,6 +305,15 @@ def fetch_hourly_tcm(
     ``12:00`` returned 360 tiles spanning 28.73-30.93 °C, while ``18:00`` six
     hours ahead returned ``{"features": []}`` with ``n_cells: 0`` and no error
     attached. So emptiness is the signal, and it has to be caught by shape.
+
+    **``cache_only`` defaults to True, and the rider path must never turn it
+    off.** These endpoints are submit-then-poll and slow: measured 2026-08-24, a
+    1 km AOI of 380 tiles took **219 seconds**. Nobody waits that long on
+    WhatsApp — and worse, a client-side timeout abandons the poll but not the
+    job, so every attempt bills whether or not anyone reads the answer. Warming
+    the cache out-of-band (see :mod:`safety_rider.warm`) is what makes the
+    nowcast affordable and fast; on the rider path a cold cell simply has no
+    nowcast, and the daily reading answers.
     """
     cell_lat, cell_lon = grid_key(latitude, longitude)
     aoi = build_aoi(cell_lat, cell_lon, settings.heat_aoi_half_side_m)
@@ -312,7 +323,10 @@ def fetch_hourly_tcm(
         response = cached_or_live(
             cache_dir() / f"heatmap_{slug}_tcm.json",
             f"hourly tcm heatmap {study_date} {hour:02d}:00",
-            getattr(client, "create_heatmap", None) if client else None,
+            # None means "cache or nothing" — cached_or_live raises on a miss
+            # rather than submitting, and the caller degrades to daily.
+            None if cache_only else
+            (getattr(client, "create_heatmap", None) if client else None),
             polygon_aoi=aoi,
             start_date=study_date,
             start_time=f"{hour:02d}:00",

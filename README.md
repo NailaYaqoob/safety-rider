@@ -339,6 +339,7 @@ safety_rider/
 ├── heat_layer.py            AOI construction, per-(cell, date) caching, tile lookup.
 ├── heat_risk.py             NOAA/OSHA-threshold engine + heat-index correction.
 ├── routing.py               Candidate routes from OSRM, scored by heat exposure.
+├── warm.py                  Pre-fetches hourly layers out of band (see Cost control).
 ├── events.py                Fan-out hub and rider registry for the dashboard.
 ├── config.py                Every setting, with the reasoning for each default.
 ├── whatsapp/
@@ -360,10 +361,25 @@ locations snap to a ~5.5 km grid and one set of layers is cached per
 (cell, date), so every rider in that cell after the first is answered from disk
 with no API traffic.
 
-The nowcast adds one request per (cell, **hour**). A whole fleet in one cell in
-one hour still pays once, but a 12-hour shift is up to 12 requests per cell per
-day on top of the 2 daily ones. `SAFETY_RIDER_NOWCAST=0` turns it off and falls
-back to daily-only, and a test asserts that switch actually stops the spend.
+**The nowcast is never fetched on the rider's message.** These endpoints are
+submit-then-poll and slow — measured 2026-08-24, an hourly layer took **219 s
+for 380 tiles and 256 s for 9,968**. That is queue latency, not tile count, so
+a smaller AOI buys nothing and no size fits inside a WhatsApp reply. Worse, a
+client-side timeout abandons the poll but *not* the billed job, so an on-demand
+retry pays repeatedly for answers nobody reads.
+
+So the rider path reads the hourly layer **cache-only**: warm, and the reply
+carries a nowcast; cold, and the daily reading answers. A test asserts a rider
+message can never submit an hourly request. The spend moves out of band:
+
+```bash
+python -m safety_rider.warm 33.4484 -112.0740      # warm one Phoenix cell
+```
+
+Cost is then bounded by **service area, not traffic** — one request per active
+cell per hour whether one rider pins there or fifty. In production this runs on
+a schedule, one pass per hour per service area. `SAFETY_RIDER_NOWCAST=0` ignores
+the hourly layer entirely.
 
 ---
 
@@ -372,12 +388,12 @@ back to daily-only, and a test asserts that switch actually stops the spend.
 ```bash
 python tests/test_whatsapp_webhook.py   # 31 checks
 python tests/test_heat_risk_live.py     # 28 checks
-python tests/test_rider_status.py       # 98 checks
+python tests/test_rider_status.py       # 99 checks
 python tests/test_dashboard.py          # 48 checks
 python tests/test_routing.py            # 31 checks
 ```
 
-**236 checks**, no pytest required, all exit non-zero on failure.
+**237 checks**, no pytest required, all exit non-zero on failure.
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
 base URL points at an unroutable address, a `FakeClient` raises if the code

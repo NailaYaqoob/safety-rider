@@ -125,17 +125,19 @@ class Settings:
     #: at. Measured 2026-08-24: the current hour returns real data; six hours
     #: ahead returns an empty layer, so this is a nowcast, never a forecast.
     #:
-    #: Costs one extra billed request per (grid cell, hour). Cached per hour, so
-    #: a whole fleet in one cell in one hour pays once — but a 12-hour shift is
-    #: still up to 12 requests per cell per day on top of the 2 daily ones. Set
-    #: SAFETY_RIDER_NOWCAST=0 to fall back to daily-only.
+    #: Costs nothing on the rider path: the hourly layer is read cache-only and
+    #: a cold cell simply has no nowcast. The spend happens in
+    #: :mod:`safety_rider.warm`, out of band, at one request per (cell, hour) —
+    #: bounded by service area rather than by traffic. Set
+    #: SAFETY_RIDER_NOWCAST=0 to ignore the hourly layer entirely.
     nowcast: bool = field(
         default_factory=lambda: (_env("SAFETY_RIDER_NOWCAST") or "1").lower()
         not in {"0", "false", "no"}
     )
 
-    #: How many hours to step back when the current hour is not yet ingested.
-    #: Each step is another billed request, so keep it small.
+    #: How many hours to step back when the current hour is not warm. These are
+    #: cache lookups, not requests, so this is free — it exists so a cell warmed
+    #: at :00 still answers at :59.
     nowcast_lookback_hours: int = field(
         default_factory=lambda: max(1, int(_env("SAFETY_RIDER_NOWCAST_LOOKBACK") or 3))
     )

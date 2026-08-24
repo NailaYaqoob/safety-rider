@@ -308,9 +308,14 @@ def _with_nowcast(client: Any, reading: TemperatureReading) -> TemperatureReadin
     now = datetime.now(tz=timezone.utc)
     for back in range(settings.nowcast_lookback_hours):
         moment = now - timedelta(hours=back)
+        # cache_only is not optional here. An hourly request takes ~4 minutes
+        # (measured: 219 s for 380 tiles, 256 s for 9,968 — it is queue time,
+        # not tile count) and a timeout abandons the poll, not the billed job.
+        # A cold cell gets no nowcast and the daily reading answers.
         layer = heat_layer.fetch_hourly_tcm(
             client, reading.latitude, reading.longitude,
             study_date=moment.date().isoformat(), hour=moment.hour,
+            cache_only=True,
         )
         if layer is None:
             continue
