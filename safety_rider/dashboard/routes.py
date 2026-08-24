@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..events import Event, hub
+from ..heat_risk import DANGER_C, OSHA_HIGH_C
 from ..models import RiderLocation
 from ..rider_status import evaluate_rider_safety_status
 from ..temperature_service import get_hyperlocal_temperature
@@ -59,6 +60,10 @@ async def dashboard_state() -> dict:
         "demo_number_configured": bool(settings.demo_number),
         "mock_mode": settings.mock_temperature,
         "subscribers": hub.subscriber_count,
+        # Served rather than hardcoded in the page: the trend chart draws its
+        # threshold lines from these, so the picture can never disagree with the
+        # banding engine that decided the colours next to it.
+        "thresholds": {"high_heat_c": OSHA_HIGH_C, "danger_c": DANGER_C},
     }
 
 

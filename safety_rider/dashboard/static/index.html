@@ -45,6 +45,27 @@
   button.primary { background: #7d2018; border-color: #a13226; }
   button.primary:hover:not(:disabled) { background: #a13226; }
 
+  /* Trend chart. Fixed height so the feed below it keeps the space it had. */
+  .trend { padding: 12px 16px 8px; border-bottom: 1px solid var(--line); position: relative; }
+  .trend h2 {
+    margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .3px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .trend svg { display: block; width: 100%; height: 128px; overflow: visible; }
+  .trend .axis  { stroke: var(--line); stroke-width: 1; }
+  .trend .rule  { stroke: #3a424d; stroke-width: 1; }
+  .trend text   { fill: var(--muted); font-size: 9px; }
+  .trend .value { fill: var(--text); font-size: 11px; font-weight: 600; }
+  .trend .hit   { fill: transparent; cursor: crosshair; }
+  .trend .cursor { stroke: #4a5462; stroke-width: 1; opacity: 0; }
+  .trend .caption { margin: 4px 0 0; font-size: 10px; color: var(--muted); }
+  #tip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: #0d1117; border: 1px solid var(--line); border-radius: 5px;
+    padding: 5px 8px; font-size: 11px; line-height: 1.4; white-space: nowrap; z-index: 5;
+  }
+  #tip b { color: var(--text); }
+
   #feed { flex: 1; overflow-y: auto; padding: 8px 0; }
   .event {
     padding: 9px 16px; border-left: 3px solid var(--unknown);
@@ -92,6 +113,13 @@
       <div class="chip warning"><b id="n-warning">0</b>Warning</div>
       <div class="chip danger"> <b id="n-danger">0</b>Danger</div>
     </div>
+
+    <section class="trend">
+      <h2>Peak temperature — last 24 readings</h2>
+      <svg id="trend" role="img" aria-label="Peak temperature per reading against the high-heat and danger thresholds"></svg>
+      <p class="caption" id="trend-caption">Waiting for the first reading.</p>
+      <div id="tip"></div>
+    </section>
 
     <div class="controls">
       <button class="primary" id="btn-spike">⚡ Simulate Heat Spike</button>
@@ -163,6 +191,17 @@ function upsertRider(r) {
   recount();
 }
 
+// The configured centre is only a fallback. A rider pinning from outside it —
+// anywhere out of the default metro — used to leave a marker thousands of km
+// off-screen while the map sat on an empty default view, which reads exactly
+// like a dashboard that is not working.
+function frameRiders() {
+  const pts = Object.values(markers).map(m => m.getLatLng());
+  if (!pts.length) return;
+  if (pts.length === 1) map.setView(pts[0], 13);
+  else map.fitBounds(L.latLngBounds(pts).pad(0.25));
+}
+
 function recount() {
   const tally = { safe: 0, warning: 0, danger: 0 };
   Object.values(markers).forEach(m => { if (tally[m._status] !== undefined) tally[m._status]++; });
@@ -202,17 +241,199 @@ function connect() {
   src.onmessage = ev => {
     const e = JSON.parse(ev.data);
     addEvent(e);
+    pushReading(e);
     if (e.latitude != null && e.rider_id) {
       upsertRider({
         rider_id: e.rider_id, latitude: e.latitude, longitude: e.longitude,
         status: e.status, temperature_c: e.temperature_c,
         hours_above_threshold: null, label: null, source: "unknown", observed_date: null,
       });
-      if (e.status === "danger") map.panTo([e.latitude, e.longitude]);
+      // Follow danger anywhere; follow anything at all if this is the first
+      // rider on the map, so the view is never left staring at empty ocean.
+      if (e.status === "danger" || Object.keys(markers).length === 1)
+        map.panTo([e.latitude, e.longitude]);
     }
   };
   // EventSource retries on its own; no manual reconnect loop needed.
 }
+
+/* ── trend chart ─────────────────────────────────────────────────────────── */
+/* One measure (peak °C) against two fixed thresholds, so the form is a line
+   read against a baseline rather than bars — a bar chart of temperature would
+   need a zero baseline, which would flatten the 25–42 °C range that matters. */
+
+const READINGS_MAX = 24;
+const readings = [];                       // { at, c, status, rider }
+let thresholds = { high_heat_c: 32.2, danger_c: 39.4 };   // replaced by /state
+
+// Read once from the stylesheet rather than duplicated as hex here: the chips,
+// the map markers and these dots must never drift apart. Resolved to concrete
+// values because var() in an SVG presentation attribute is not portable — it
+// renders black in several SVG engines, which would silently turn every band
+// the same colour.
+const ink = name =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const BAND = { safe: ink("--safe"), warning: ink("--warning"),
+               danger: ink("--danger"), unknown: ink("--unknown") };
+const SURFACE = ink("--panel");
+
+function pushReading(e, { draw = true } = {}) {
+  // Only evaluations carry a temperature; system lines and failed reads do not.
+  if (e.temperature_c == null || !isFinite(e.temperature_c)) return;
+  readings.push({
+    at: e.at ? new Date(e.at) : new Date(),
+    c: e.temperature_c,
+    status: e.status || "unknown",
+    rider: e.rider_id || "—",
+  });
+  while (readings.length > READINGS_MAX) readings.shift();
+  // Backfill passes a whole history in a loop and draws once at the end.
+  if (draw) drawTrend();
+}
+
+const svg = document.getElementById("trend");
+const tip = document.getElementById("tip");
+const caption = document.getElementById("trend-caption");
+
+function svgEl(name, attrs, text) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (text != null) el.textContent = text;   // textContent, never innerHTML
+  return el;
+}
+
+function drawTrend() {
+  svg.replaceChildren();
+  const W = svg.clientWidth || 368, H = 128;
+  const L = 30, R = 10, T = 8, B = 16;              // plot margins
+  const x0 = L, x1 = W - R, y0 = T, y1 = H - B;
+
+  if (!readings.length) {
+    svg.append(svgEl("text", { x: W / 2, y: H / 2, "text-anchor": "middle" },
+                     "No readings yet"));
+    caption.textContent = "Waiting for the first reading.";
+    return;
+  }
+
+  // Domain always spans both thresholds, so the reference lines are on screen
+  // even when every rider is cool — "how far below danger" is the whole point.
+  const temps = readings.map(r => r.c);
+  const lo = Math.floor(Math.min(...temps, thresholds.high_heat_c) - 2);
+  const hi = Math.ceil(Math.max(...temps, thresholds.danger_c) + 2);
+  const y = c => y1 - ((c - lo) / (hi - lo)) * (y1 - y0);
+  const n = readings.length;
+  const x = i => n === 1 ? (x0 + x1) / 2 : x0 + (i / (n - 1)) * (x1 - x0);
+
+  // Band washes: the zones the thresholds cut the scale into, at ~10%.
+  const zones = [
+    [lo, thresholds.high_heat_c, BAND.safe],
+    [thresholds.high_heat_c, thresholds.danger_c, BAND.warning],
+    [thresholds.danger_c, hi, BAND.danger],
+  ];
+  for (const [a, b, fill] of zones) {
+    const top = y(Math.min(b, hi)), bottom = y(Math.max(a, lo));
+    if (bottom - top > 0.5)
+      svg.append(svgEl("rect", { x: x0, y: top, width: x1 - x0,
+                                 height: bottom - top, fill, opacity: 0.14 }));
+  }
+
+  // Threshold rules, labelled — status is never carried by colour alone.
+  // Labels sit at the left because the right edge belongs to the endpoint
+  // value; two right-aligned labels collide the moment the latest reading is
+  // near a threshold, which is exactly when it is being read.
+  const LABEL_ZONE = x0 + 95;                       // where the labels lie
+  const nearYs = readings.map((r, i) => [x(i), y(r.c)])
+                         .filter(([px]) => px <= LABEL_ZONE)
+                         .map(([, py]) => py);
+  for (const [c, label] of [[thresholds.high_heat_c, "high heat"],
+                            [thresholds.danger_c, "danger"]]) {
+    const yc = y(c);
+    svg.append(svgEl("line", { class: "rule", x1: x0, x2: x1, y1: yc, y2: yc }));
+    // Sit on whichever side of the rule the trace is not using. Above by
+    // default, and when nothing is nearby.
+    const traceAbove = nearYs.some(py => py < yc);
+    const traceBelow = nearYs.some(py => py > yc);
+    const ly = traceAbove && !traceBelow ? yc + 12 : yc - 4;
+    svg.append(svgEl("text", { x: x0 + 4, y: ly }, `${label} ${c.toFixed(1)}°`));
+  }
+
+  // Y axis: just the two ends, rounded. The rules carry the middle.
+  svg.append(svgEl("line", { class: "axis", x1: x0, x2: x0, y1: y0, y2: y1 }));
+  for (const c of [lo, hi])
+    svg.append(svgEl("text", { x: x0 - 5, y: y(c) + 3, "text-anchor": "end" },
+                     `${c}°`));
+
+  // The line: neutral ink, because identity here belongs to the dots.
+  if (n > 1) {
+    svg.append(svgEl("polyline", {
+      class: "series", fill: "none", stroke: "#6b7684", "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round",
+      points: readings.map((r, i) => `${x(i)},${y(r.c)}`).join(" "),
+    }));
+  }
+
+  const cursor = svgEl("line", { class: "cursor", y1: y0, y2: y1, x1: 0, x2: 0 });
+  svg.append(cursor);
+
+  // Dots: 9px, filled by band, with a 2px surface ring so they stay legible
+  // where the line crosses them.
+  readings.forEach((r, i) => {
+    svg.append(svgEl("circle", {
+      cx: x(i), cy: y(r.c), r: 4.5, fill: BAND[r.status] || BAND.unknown,
+      stroke: SURFACE, "stroke-width": 2,
+    }));
+  });
+
+  // Label the endpoint only — a number on every dot is unreadable at 368px.
+  const last = readings[n - 1];
+  const lastX = x(n - 1), lastY = y(last.c);
+  // Place it on the free side. The incoming segment occupies the space above
+  // the endpoint when the trace is rising and below it when falling, so
+  // following the slope keeps the label off the line without any nudging.
+  const rising = n > 1 && last.c >= readings[n - 2].c;
+  const labelY = rising ? Math.max(lastY - 10, y0 + 10)
+                        : Math.min(lastY + 17, y1 - 2);
+  svg.append(svgEl("text", {
+    class: "value", x: Math.min(lastX + 8, x1), y: labelY,
+    "text-anchor": lastX > x1 - 40 ? "end" : "start",
+  }, `${last.c.toFixed(1)} °C`));
+
+  // Hit slots, wider than the dots, one per reading.
+  const slot = (x1 - x0) / Math.max(n - 1, 1);
+  readings.forEach((r, i) => {
+    const hit = svgEl("rect", {
+      class: "hit", x: x(i) - slot / 2, y: y0, width: slot, height: y1 - y0,
+    });
+    hit.addEventListener("mouseenter", () => {
+      cursor.setAttribute("x1", x(i)); cursor.setAttribute("x2", x(i));
+      cursor.style.opacity = 1;
+      tip.textContent = "";
+      tip.append(
+        Object.assign(document.createElement("b"), { textContent: `${r.c.toFixed(1)} °C` }),
+        document.createTextNode(` · ${r.status}`),
+        document.createElement("br"),
+        document.createTextNode(`${r.rider} · ${r.at.toLocaleTimeString()}`),
+      );
+      tip.style.opacity = 1;
+      tip.style.left = Math.max(4, Math.min(x(i) + 4, svg.clientWidth - 130)) + "px";
+      tip.style.top = (y(r.c) + 34) + "px";
+    });
+    hit.addEventListener("mouseleave", () => {
+      tip.style.opacity = 0; cursor.style.opacity = 0;
+    });
+    svg.append(hit);
+  });
+
+  const clock = d => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const span = n === 1 ? clock(last.at) : `${clock(readings[0].at)} → ${clock(last.at)}`;
+  // Evaluations arrive irregularly, so the x axis is arrival order, not a time
+  // scale. Saying so costs a few words and stops the gaps being misread.
+  caption.textContent =
+    `${n} reading${n > 1 ? "s" : ""} · ${span} · spaced evenly, not by time`;
+}
+
+// The panel is a fixed 400px today, but a resized window still redraws.
+addEventListener("resize", drawTrend);
 
 /* ── controls ────────────────────────────────────────────────────────────── */
 
@@ -239,6 +460,8 @@ document.getElementById("btn-reset").onclick = async () => {
   Object.values(markers).forEach(m => map.removeLayer(m));
   for (const k in markers) delete markers[k];
   feed.innerHTML = '<div class="empty">Reset. Waiting for events…</div>';
+  readings.length = 0;
+  drawTrend();
   recount();
 };
 
@@ -247,9 +470,17 @@ document.getElementById("btn-reset").onclick = async () => {
 (async function start() {
   const s = await (await fetch(API.state)).json();
   devTools = s.dev_tools;
+  if (s.thresholds) thresholds = s.thresholds;
   initMap(s.center);
   s.riders.forEach(upsertRider);
-  s.events.forEach(e => addEvent(e, { prepend: false }));
+  frameRiders();
+  // history() is oldest-first, which is the order the chart wants; the feed
+  // appends in the same pass so both read from one traversal.
+  s.events.forEach(e => {
+    addEvent(e, { prepend: false });
+    pushReading(e, { draw: false });
+  });
+  drawTrend();
 
   document.getElementById("subtitle").textContent =
     `${s.riders.length} rider(s) tracked · map centred on ${s.center.lat.toFixed(3)}, ${s.center.lon.toFixed(3)}`;

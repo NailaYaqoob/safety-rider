@@ -57,6 +57,18 @@ check(f"centre defaults to San Jose ({s['center']['lat']}, {s['center']['lon']})
 check("starts empty after clear", s["riders"] == [] and s["events"] == [])
 check("reports mock mode so the UI can label it", s["mock_mode"] is True)
 
+# The trend chart draws its threshold lines from these. If they ever drift from
+# the banding engine the picture contradicts the colours printed beside it —
+# a chart that says "below the line" next to a dot the engine called Danger.
+from safety_rider.heat_risk import DANGER_C, OSHA_HIGH_C   # noqa: E402
+check("serves the band thresholds", "thresholds" in s)
+check(f"high-heat line is the engine's ({s['thresholds']['high_heat_c']})",
+      s["thresholds"]["high_heat_c"] == OSHA_HIGH_C)
+check(f"danger line is the engine's ({s['thresholds']['danger_c']})",
+      s["thresholds"]["danger_c"] == DANGER_C)
+check("thresholds are ordered low then high",
+      s["thresholds"]["high_heat_c"] < s["thresholds"]["danger_c"])
+
 print("\n[4] Simulate heat spike")
 r = client.post("/api/dashboard/simulate",
                 json={"temperature_c": 41.5, "send_whatsapp": True})
