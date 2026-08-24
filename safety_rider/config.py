@@ -116,8 +116,15 @@ class Settings:
     #: ingested and came back as a single hour, while the day before was
     #: complete. Starting at 1 costs a wasted heatmap request before the
     #: partial-day check steps back, and heatmaps are billed per request.
+    #:
+    #: Three, not two. Re-measured 2026-08-24 across both San Jose and Phoenix:
+    #: the 08-22 layer was still 100% flat (partial) two days on, while 08-21 and
+    #: 08-16 carried an 8-16 °C per-tile spread. Ingestion lag is not fixed — on
+    #: 08-23 two days back *was* complete — so this trades at most one extra day
+    #: of staleness in the reported peak against a guaranteed wasted billed
+    #: request on every cold cell. Backfill still steps deeper when it must.
     heat_days_back: int = field(
-        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_DAYS_BACK") or 2))
+        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_DAYS_BACK") or 3))
     )
 
     #: Fetch the current hour's layer alongside the daily one, so the rider is
