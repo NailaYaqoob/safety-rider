@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigurationError, settings, validate_startup
@@ -71,6 +72,17 @@ async def _startup() -> None:
             "SAFETY_RIDER_DEV_TOOLS=0 to disable."
         )
     log.info("Dashboard: http://127.0.0.1:8000/dashboard")
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Send the bare domain to the dashboard.
+
+    The deployed URL is what a reviewer pastes into a browser, and an app with
+    no root route answers that with a bare ``{"detail":"Not Found"}``. The
+    dashboard is the only page a human wants here, so point at it.
+    """
+    return RedirectResponse(url="/dashboard")
 
 
 @app.get("/health", tags=["ops"])
