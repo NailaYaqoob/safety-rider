@@ -243,17 +243,20 @@ async def _evaluate_and_reply(message: InboundMessage, location: RiderLocation) 
         status.status.value,
     )
 
+    # Send first, then publish: the feed line states whether the rider was
+    # actually reached, and it cannot do that before the attempt is made.
+    delivered = await _safe_graph_call(
+        graph_client.send_text(message.from_number, status.to_whatsapp_text(reading)),
+        "safety notification",
+    ) is not None
+
     publish_evaluation(
         from_number=message.from_number,
         location=location,
         status=status,
         reading=reading,
         label=message.profile_name,
-    )
-
-    await _safe_graph_call(
-        graph_client.send_text(message.from_number, status.to_whatsapp_text(reading)),
-        "safety notification",
+        delivered=delivered,
     )
 
     if status.rest_protocol:
@@ -381,12 +384,20 @@ def publish_evaluation(
     status: RiderSafetyStatus,
     reading: Any,
     label: str | None = None,
+    delivered: bool | None = None,
 ) -> None:
     """Push one evaluation onto the dashboard: move the pin, write the feed line.
 
     Shared by the live webhook path and the demo simulator so the dashboard
     cannot drift from what the pipeline actually decided — a simulated spike
     renders through exactly the same code as a real rider.
+
+    ``delivered`` reports the outcome of the outbound WhatsApp send: ``True``
+    reached the rider, ``False`` did not, ``None`` means no send was attempted.
+    The feed used to claim "alert sent" unconditionally, which it announced
+    before the send was even tried — so an expired token or a closed 24-hour
+    window left a dispatcher reading that a rider had been warned when nobody
+    had. A safety console must not overstate delivery.
     """
     rider_id = from_number if settings.dashboard_unmask else mask_number(from_number)
 
@@ -403,17 +414,26 @@ def publish_evaluation(
     ))
 
     where = location.name or f"{location.latitude:.4f}, {location.longitude:.4f}"
+    if delivered is None:
+        delivery = ""
+    elif delivered:
+        delivery = " WhatsApp alert sent." if status.rest_protocol else " WhatsApp update sent."
+    else:
+        delivery = (" ⚠️ WhatsApp alert NOT delivered — rider not reached."
+                    if status.rest_protocol
+                    else " ⚠️ WhatsApp update NOT delivered — rider not reached.")
+
     if status.temperature_c is None:
-        text = f"Rider {rider_id}: no temperature available at {where}."
+        text = f"Rider {rider_id}: no temperature available at {where}.{delivery}"
     elif status.rest_protocol:
         text = (
             f"Rider {rider_id} entered a {status.temperature_c:.1f} °C zone at "
-            f"{where}. Rest protocol triggered — WhatsApp alert sent."
+            f"{where}. Rest protocol triggered.{delivery}"
         )
     else:
         text = (
             f"Rider {rider_id} at {where}: {status.temperature_c:.1f} °C — "
-            f"{status.status.value}. WhatsApp update sent."
+            f"{status.status.value}.{delivery}"
         )
 
     hub.publish(Event(

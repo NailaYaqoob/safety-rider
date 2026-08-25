@@ -200,6 +200,7 @@ function frameRiders() {
   if (!pts.length) return;
   if (pts.length === 1) map.setView(pts[0], 13);
   else map.fitBounds(L.latLngBounds(pts).pad(0.25));
+  updateSubtitle();
 }
 
 function recount() {
@@ -208,6 +209,19 @@ function recount() {
   document.getElementById("n-safe").textContent    = tally.safe;
   document.getElementById("n-warning").textContent = tally.warning;
   document.getElementById("n-danger").textContent  = tally.danger;
+  updateSubtitle();
+}
+
+// The subtitle used to be written once at boot, so a rider arriving over SSE
+// left it reading "0 rider(s) tracked" next to a map full of markers. It also
+// quoted the configured centre, which frameRiders() has usually moved off.
+// Both halves are read from live state instead.
+function updateSubtitle() {
+  const n = Object.keys(markers).length;
+  const c = map && map.getCenter();
+  document.getElementById("subtitle").textContent =
+    `${n} rider(s) tracked` +
+    (c ? ` \u00b7 map centred on ${c.lat.toFixed(3)}, ${c.lng.toFixed(3)}` : "");
 }
 
 /* ── feed ────────────────────────────────────────────────────────────────── */
@@ -482,8 +496,7 @@ document.getElementById("btn-reset").onclick = async () => {
   });
   drawTrend();
 
-  document.getElementById("subtitle").textContent =
-    `${s.riders.length} rider(s) tracked · map centred on ${s.center.lat.toFixed(3)}, ${s.center.lon.toFixed(3)}`;
+  updateSubtitle();
   document.getElementById("mode").textContent =
     (s.mock_mode ? "SIMULATED temperatures" : "live FortyGuard data") +
     (s.demo_number_configured ? "" : " · no demo number set");

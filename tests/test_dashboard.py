@@ -181,6 +181,39 @@ js = json.dumps(st.to_dict())
 check("JSON round-trips", json.loads(js)["temperature_c"] == 41.5)
 check("carries an ISO timestamp", "T" in json.loads(js)["updated_at"])
 
+print("\n[10] The feed never claims a delivery that did not happen")
+from safety_rider.models import RiderLocation
+from safety_rider.rider_status import evaluate_rider_safety_status
+from safety_rider.whatsapp.webhook import publish_evaluation
+
+def feed_text(delivered, temp_c=41.5):
+    hub.clear()
+    publish_evaluation(
+        from_number="14155551234",
+        location=RiderLocation(latitude=33.4484, longitude=-112.0740, name="Phoenix"),
+        status=evaluate_rider_safety_status(temp_c, hours_above_threshold=10.0),
+        reading=None,
+        label="Probe",
+        delivered=delivered,
+    )
+    return [e for e in hub.history() if e["kind"] == "evaluation"][-1]["text"]
+
+sent_text = feed_text(True)
+check(f"delivered=True says sent -> {sent_text!r}", "sent." in sent_text)
+
+failed_text = feed_text(False)
+check("delivered=False does NOT claim it was sent",
+      "sent." not in failed_text)
+check(f"delivered=False says so plainly -> {failed_text!r}",
+      "NOT delivered" in failed_text and "not reached" in failed_text)
+
+none_text = feed_text(None)
+check("delivered=None makes no delivery claim at all",
+      "sent." not in none_text and "NOT delivered" not in none_text)
+
+check("the reading itself still reaches the feed",
+      "41.5" in sent_text and "41.5" in failed_text and "41.5" in none_text)
+
 hub.clear()
 print("\n" + ("ALL DASHBOARD CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
 raise SystemExit(0 if ok else 1)

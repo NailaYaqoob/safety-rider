@@ -155,6 +155,8 @@ async def simulate_heat_spike(body: SimulateRequest) -> dict:
         status=result,
         reading=reading,
         label=body.rider_label,
+        # No send attempted -> None, so the feed makes no delivery claim.
+        delivered=sent if body.send_whatsapp else None,
     )
     if error:
         hub.publish(Event(kind="system", text=f"Simulate: {error}", status="unknown"))

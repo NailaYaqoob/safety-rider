@@ -389,11 +389,11 @@ the hourly layer entirely.
 python tests/test_whatsapp_webhook.py   # 31 checks
 python tests/test_heat_risk_live.py     # 28 checks
 python tests/test_rider_status.py       # 99 checks
-python tests/test_dashboard.py          # 48 checks
+python tests/test_dashboard.py          # 53 checks
 python tests/test_routing.py            # 31 checks
 ```
 
-**237 checks**, no pytest required, all exit non-zero on failure.
+**242 checks**, no pytest required, all exit non-zero on failure.
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
 base URL points at an unroutable address, a `FakeClient` raises if the code
