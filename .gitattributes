@@ -1,0 +1,15 @@
+# Normalise line endings on the way into the repo.
+#
+# Without this, editing on Windows/WSL rewrote every vendored file with CRLF
+# and `git status` showed the entire FortyGuard template as modified — 18,000
+# lines of churn across files NOTICE.md says are used unmodified. Anyone
+# reviewing the repo saw a rewritten template rather than the original.
+* text=auto eol=lf
+
+# Binary: never touch these.
+*.png binary
+*.jpg binary
+*.ico binary
+
+# Notebooks are JSON but diff badly; keep them LF and out of merge attempts.
+*.ipynb text eol=lf
