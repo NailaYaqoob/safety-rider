@@ -144,6 +144,17 @@ high-heat line), because four hours at 33 °C is a harder day than twenty minute
 at 34 °C and a peak-only reading cannot tell the difference. It never
 manufactures Danger — that stays anchored to 40 °C.
 
+**Every verdict names the published threshold it crossed.** The bands above are
+ours; the line underneath them is NOAA's and OSHA's, and both the rider's
+message and the dispatcher's feed print it:
+
+> _Threshold: NOAA Danger, ≥ 39.4 °C (103 °F)._
+
+That is the sentence an operator repeats when a stopped shift is questioned —
+by the rider who thinks it was over-cautious, by the manager who paid for it, or
+by an inspector afterwards. "It felt hot" is not defensible; a published onset
+temperature is.
+
 ---
 
 ## What we measured
@@ -234,6 +245,12 @@ for a shift.
 - **Live map** (Leaflet) with a marker per rider — green Safe, orange Warning,
   **blinking red Danger**, auto-panning to anyone entering Danger, and framing
   itself on wherever the fleet actually is.
+- **Route comparison drawn on the map** — when a rider asks for a route, both
+  candidates appear: the direct one dashed in red, the cooler one solid in
+  blue, each clickable for its distance, duration, peak and °C·h exposure. A
+  dispatcher can judge the detour instead of reading that one was offered. If a
+  route leaves FortyGuard's coverage the line says so rather than passing a
+  partially-blind score off as a full one.
 - **Peak-temperature trend** — the last 24 readings plotted against the OSHA
   high-heat and NOAA Danger lines, so a dispatcher sees a shift heating up
   rather than only the moment it crosses.
@@ -337,7 +354,8 @@ safety_rider/
 │                            Never raises; failure returns as data.
 ├── rider_status.py          evaluateRiderSafetyStatus — the bands and protocols.
 ├── heat_layer.py            AOI construction, per-(cell, date) caching, tile lookup.
-├── heat_risk.py             NOAA/OSHA-threshold engine + heat-index correction.
+├── heat_risk.py             NOAA/OSHA thresholds, heat-index correction, and the
+│                            citation printed under every verdict.
 ├── routing.py               Candidate routes from OSRM, scored by heat exposure.
 ├── warm.py                  Pre-fetches hourly layers out of band (see Cost control).
 ├── events.py                Fan-out hub and rider registry for the dashboard.
@@ -350,9 +368,12 @@ safety_rider/
 ```
 
 **Two banding engines, deliberately.** `rider_status` is the operational
-protocol — coarse, decisive, what the rider sees. `heat_risk` bands against
+protocol — coarse, decisive, what the rider sees. `heat_risk` holds the
 published NOAA/OSHA thresholds and is what you cite when someone asks why a
-warning fired. They answer different questions and are kept separate.
+warning fired. They answer different questions and are kept separate, but they
+are not independent: every verdict `rider_status` produces carries the
+`heat_risk` citation for the line it crossed, so the decisive answer and the
+defensible one always travel together.
 
 ### Cost control
 
@@ -386,14 +407,15 @@ the hourly layer entirely.
 ## Tests
 
 ```bash
-python tests/test_whatsapp_webhook.py   # 31 checks
-python tests/test_heat_risk_live.py     # 28 checks
-python tests/test_rider_status.py       # 99 checks
-python tests/test_dashboard.py          # 53 checks
-python tests/test_routing.py            # 31 checks
+python tests/test_whatsapp_webhook.py   #  30 checks
+python tests/test_heat_risk_live.py     #  27 checks
+python tests/test_rider_status.py       # 113 checks
+python tests/test_dashboard.py          #  68 checks
+python tests/test_routing.py            #  48 checks
 ```
 
-**242 checks**, no pytest required, all exit non-zero on failure.
+**286 checks**, no pytest required, all exit non-zero on failure. CI runs every
+suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
 base URL points at an unroutable address, a `FakeClient` raises if the code
@@ -418,12 +440,22 @@ Stated plainly, because a safety tool that overstates itself is worse than none.
   OSRM instance before anyone depends on this.
 - **Single process.** The event hub and the message-dedup cache are both
   in-memory. Running more than one worker silently splits riders between them;
-  both need Redis before scaling out.
+  both need Redis before scaling out. The rider registry — the last known
+  position a routing request is answered from — *is* persisted to disk and
+  restored at startup, so a redeploy no longer tells a rider who pinned a
+  minute ago that we have no idea where they are. Entries expire after 24
+  hours, which is also the window past which WhatsApp will not let us send them
+  a free-form reply anyway.
 - **Resolution is 60/80/100 m**, not 10 m — the API's tile sizes.
 - **No durable record yet.** The alert history is an in-memory ring of the last
   100 events and is lost on restart. Fleet customers will want a retained,
   exportable trail of who was warned and when — that is a database, and it is
   the first thing to build after the hackathon, not something claimed here.
+- **The dispatch console is unauthenticated.** Anyone with the URL sees rider
+  positions and the alert feed. Phone numbers are masked and the simulator is
+  gated behind `SAFETY_RIDER_DEV_TOOLS`, but the page itself is open — keep the
+  deployed URL private, and put real access control in front of it before a
+  fleet customer's riders are on it.
 - **Cargo thresholds are not exposed.** The engine generalises to them; the
   product does not offer them.
 

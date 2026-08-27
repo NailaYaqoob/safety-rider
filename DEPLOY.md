@@ -28,7 +28,7 @@ WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
 WHATSAPP_GRAPH_API_VERSION=v21.0
 
 SAFETY_RIDER_LIVE_HEAT=1
-SAFETY_RIDER_DAYS_BACK=2
+SAFETY_RIDER_DAYS_BACK=3
 SAFETY_RIDER_BACKFILL_DAYS=6
 SAFETY_RIDER_NOWCAST=1            # use warmed current-hour layers; 0 = daily only
 SAFETY_RIDER_NOWCAST_LOOKBACK=3   # hours to step back if now is not warm (cache reads, free)
@@ -80,6 +80,10 @@ This URL is stable, so unlike a quick tunnel you only paste it once.
 Without it, every redeploy starts with an empty heat-layer cache and the next
 rider in each area re-bills the FortyGuard API — roughly **8,440 credits per
 grid cell**. The volume makes the cache survive deploys.
+
+The volume also holds `data/riders.json`, the last-known-position registry a
+routing request is answered from. Without it, every redeploy tells a rider who
+pinned a minute ago that we do not know where they are.
 
 ### Verify
 

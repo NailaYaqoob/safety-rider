@@ -1,0 +1,46 @@
+# The suites are standalone scripts, not pytest: each one exits non-zero on the
+# first failed assertion and prints every check it ran. That is deliberate (see
+# tests/README.md), and it means CI needs nothing beyond a Python and the
+# service dependencies.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # requirements-deploy.txt, not requirements.txt: the latter pulls in
+      # JupyterLab, pandas, matplotlib and reportlab (~146 MB) for the
+      # notebooks, none of which the service or its tests import.
+      - name: Install service dependencies
+        run: pip install -r requirements-deploy.txt
+
+      # Every suite is offline by construction — the FortyGuard base URL points
+      # at an unroutable address and outbound Graph calls are captured rather
+      # than sent. These are belt-and-braces: a suite that reaches the network
+      # in CI should fail loudly rather than bill someone's API key.
+      - name: Run the suites
+        env:
+          SAFETY_RIDER_LIVE_HEAT: "0"
+          SAFETY_RIDER_MOCK_TEMPERATURE: "1"
+          FORTYGUARD_API_KEY: ""
+        run: |
+          failed=0
+          for suite in tests/test_*.py; do
+            echo "::group::$suite"
+            python "$suite" || failed=1
+            echo "::endgroup::"
+          done
+          exit $failed
