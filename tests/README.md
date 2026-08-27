@@ -4,12 +4,13 @@
     ../venv/bin/python tests/test_heat_risk_live.py
     ../venv/bin/python tests/test_rider_status.py
     ../venv/bin/python tests/test_routing.py
+    ../venv/bin/python tests/test_shade.py
     ../venv/bin/python tests/test_dashboard.py
     ../venv/bin/python tests/test_rate_limit.py
     ../venv/bin/python tests/test_warm.py
     ../venv/bin/python tests/test_escalation.py
 
-All eight run standalone — no pytest required — and exit non-zero on any failure.
+All nine run standalone — no pytest required — and exit non-zero on any failure.
 CI runs the same loop on every push (`.github/workflows/tests.yml`).
 
 | File | Covers |
@@ -21,6 +22,7 @@ CI runs the same loop on every push (`.github/workflows/tests.yml`).
 | `test_rate_limit.py` | The sliding window itself (budget, recovery, notify-once, per-rider isolation, bounded memory, the disable switch), and the pipeline built on it: a flooding rider cut off after one warning, the throttle reaching the dispatcher, and a refused route handing its general budget back so the safety check stays open |
 | `test_warm.py` | The nowcast warmer's schedule: forgiving cell parsing, the guards that keep it switched off unless deliberately enabled, one-cell-at-a-time passes, surviving a failing cell and a failing pass, clean cancellation, and the app starting and stopping it. Every billed call is stubbed — a real warm costs credits and four minutes |
 | `test_escalation.py` | What a Danger verdict does beyond the reply: dispatcher escalation and its contents, remembering a rider's destination across later evaluations, the automatic cooler route and the four cases where it correctly stays silent, and the route budget applying to it |
+| `test_shade.py` | Canopy parsing across unknown class vocabularies, bare asphalt as a real zero vs an unreadable response, percentage-scale inference, the cache-only rider path, the warmer paying once, shade flipping a route recommendation on equal temperature, and the guarantee that it never moves a reported temperature or a safety band |
 | `test_dashboard.py` | Page and vendored assets, phone masking, the state endpoint, the guarded simulator, SSE fan-out and backpressure, honest delivery reporting, the rider registry surviving a restart (including TTL expiry and a corrupt file), and a route comparison reaching the map |
 
 ## Every suite is offline by design

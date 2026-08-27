@@ -35,6 +35,7 @@ import httpx
 from .config import settings
 from .heat_layer import grid_key, is_in_coverage
 from .models import RiderLocation
+from .shade import describe as describe_shade, shade_fraction
 from .temperature_service import TemperatureReading, get_hyperlocal_temperature
 
 log = logging.getLogger(__name__)
@@ -92,6 +93,9 @@ class RouteCandidate:
     peak_c: float | None = None
     mean_c: float | None = None
     cells_sampled: int = 0
+    #: Mean canopy-weighted shade across the priced cells, 0-1, or None when no
+    #: cell had segmentation cached. Ranking input only — see safety_rider/shade.py.
+    shade_fraction: float | None = None
     #: Fraction of the sampled cells that returned a usable temperature. Below
     #: 1.0 the route leaves FortyGuard's coverage somewhere, and its score
     #: describes only the part we could measure — see :func:`score_candidate`.
@@ -116,6 +120,7 @@ class RouteCandidate:
             "mean_c": self.mean_c,
             "cells_sampled": self.cells_sampled,
             "coverage": round(self.coverage, 2),
+            "shade_fraction": self.shade_fraction,
             "source": self.source,
             "coordinates": self.coordinates,
         }
@@ -143,12 +148,20 @@ class RouteComparison:
 
         extra_min = self.coolest.duration_min - self.fastest.duration_min
         saved = (self.fastest.degree_hours or 0) - (self.coolest.degree_hours or 0)
+
+        def shade_note(candidate: RouteCandidate) -> str:
+            if candidate.shade_fraction is None:
+                return ""
+            return f", {describe_shade(candidate.shade_fraction)}"
+
         return (
             f"🧭 *Cooler route found*\n\n"
             f"Direct: {self.fastest.distance_km:.1f} km, "
-            f"{self.fastest.duration_min:.0f} min, peak {self.fastest.peak_c:.1f} °C\n"
+            f"{self.fastest.duration_min:.0f} min, peak {self.fastest.peak_c:.1f} °C"
+            f"{shade_note(self.fastest)}\n"
             f"Cooler: {self.coolest.distance_km:.1f} km, "
-            f"{self.coolest.duration_min:.0f} min, peak {self.coolest.peak_c:.1f} °C\n\n"
+            f"{self.coolest.duration_min:.0f} min, peak {self.coolest.peak_c:.1f} °C"
+            f"{shade_note(self.coolest)}\n\n"
             f"About {extra_min:.0f} min longer, but roughly *{saved:.1f} fewer "
             f"°C-hours* of high heat."
         )
@@ -181,6 +194,7 @@ class RouteComparison:
                 "degree_hours": (None if candidate.degree_hours is None
                                  else round(candidate.degree_hours, 2)),
                 "coverage": round(candidate.coverage, 2),
+                "shade_fraction": candidate.shade_fraction,
             }
 
         payload: dict[str, Any] = {
@@ -402,7 +416,28 @@ def score_candidate(candidate: RouteCandidate, max_cells: int | None = None) -> 
     share = hours_total / len(cells)
 
     temps = [r.decision_celsius for r in readings]
-    candidate.degree_hours = sum(max(0.0, t - OSHA_HIGH_C) * share for t in temps)
+
+    # Shade, where it is known. Cache-only: a cell the warmer has not paid for
+    # contributes nothing and the route is ranked on temperature alone, which
+    # is exactly the behaviour that existed before shade routing.
+    shades = [shade_fraction(r.latitude, r.longitude) for r in readings]
+    known = [sh for sh in shades if sh is not None]
+    candidate.shade_fraction = round(sum(known) / len(known), 3) if known else None
+
+    # Canopy is charged against the exposure score, not against the reported
+    # temperature. A shaded cell is scored as if it were `shade_equivalent_c`
+    # degrees cooler — air under canopy is barely cooler, but the radiant load
+    # on a body is far lower, and this is the one knob that says so without
+    # pretending to a mean-radiant-temperature model.
+    #
+    # peak_c and mean_c below stay the MEASURED values. The number a rider is
+    # shown, and the band they are placed in, must never be an adjusted one.
+    effective = [
+        t - settings.shade_equivalent_c * (sh or 0.0)
+        for t, sh in zip(temps, shades)
+    ]
+
+    candidate.degree_hours = sum(max(0.0, t - OSHA_HIGH_C) * share for t in effective)
     candidate.peak_c = round(max(temps), 1)
     candidate.mean_c = round(sum(temps) / len(temps), 1)
     candidate.cells_sampled = len(readings)

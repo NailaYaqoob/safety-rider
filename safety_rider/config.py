@@ -230,6 +230,29 @@ class Settings:
         default_factory=lambda: max(1, int(_env("SAFETY_RIDER_MAX_ROUTE_CELLS") or 4))
     )
 
+    # ── Shade routing (safety_rider/shade.py) ──────────────────────────────
+    #: Let canopy cover influence which route is recommended. Reads the
+    #: segmentation cache only on the rider path, so this is free unless the
+    #: warmer has paid for the cells; with nothing cached it is a no-op and
+    #: routing ranks on temperature alone.
+    shade_routing: bool = field(
+        default_factory=lambda: (_env("SAFETY_RIDER_SHADE_ROUTING") or "1").lower()
+        not in {"0", "false", "no"}
+    )
+
+    #: How many °C of measured air temperature a fully-canopied cell is worth
+    #: when *ranking routes*. A modelling assumption, not a measurement: air
+    #: temperature under canopy is only a degree or two lower, but the radiant
+    #: load on a body is far lower still, and this is the single knob that
+    #: expresses that without pretending to a mean-radiant-temperature model.
+    #:
+    #: It moves route ranking ONLY. No value here can change the band a rider
+    #: is told, which is decided on measured air temperature at their own
+    #: position — see the note at the top of safety_rider/shade.py.
+    shade_equivalent_c: float = field(
+        default_factory=lambda: float(_env("SAFETY_RIDER_SHADE_EQUIVALENT_C") or 3.0)
+    )
+
     # ── Danger escalation (safety_rider/whatsapp/webhook.py) ───────────────
     #: Where a Danger verdict is escalated, in E.164 without the '+'. Unset
     #: means the rest protocol stays between the service and the rider, which

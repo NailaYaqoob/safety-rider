@@ -42,6 +42,7 @@ from fortyguard import FortyGuardClient
 
 from . import heat_layer
 from .config import settings
+from .shade import shade_fraction
 
 log = logging.getLogger(__name__)
 
@@ -153,6 +154,24 @@ def resume_activity(
 # ─────────────────────────────────────────────────────────────── scheduler
 
 
+def warm_shade(latitude: float, longitude: float) -> float | None:
+    """Pay for this cell's satellite segmentation once, so routing can use it.
+
+    Land cover does not change hour to hour, so unlike the hourly layers this
+    is billed once per cell and then answered from disk forever — an already
+    cached cell costs nothing and returns immediately. Never raises: shade is
+    an enhancement to route ranking, and losing it must not cost a warm pass.
+    """
+    if not settings.shade_routing:
+        return None
+    try:
+        client = FortyGuardClient()
+        return shade_fraction(latitude, longitude, client=client, cache_only=False)
+    except Exception:  # noqa: BLE001 — see the docstring.
+        log.exception("Shade warm failed for %.4f,%.4f; continuing.", latitude, longitude)
+        return None
+
+
 async def warm_once(cells: list[tuple[float, float]], hours: int) -> int:
     """One pass over the service area. Returns how many hours came back warm.
 
@@ -167,6 +186,12 @@ async def warm_once(cells: list[tuple[float, float]], hours: int) -> int:
             # warm_cell blocks for minutes at a time. Off the event loop, or a
             # single pass would stall every rider waiting on a reply.
             warmed += await asyncio.to_thread(warm_cell, latitude, longitude, hours)
+            # Segmentation is billed once per cell and cached with no expiry,
+            # so after the first pass over a service area this is a disk read.
+            fraction = await asyncio.to_thread(warm_shade, latitude, longitude)
+            if fraction is not None:
+                log.info("Shade for %.4f,%.4f: %.0f%% canopy-weighted.",
+                         latitude, longitude, fraction * 100)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a scheduler must outlive one bad cell.
@@ -234,6 +259,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hours", type=int, default=1,
                         help="how many hours back to warm (default 1). "
                              "Each is a billed request.")
+    parser.add_argument("--shade-only", action="store_true",
+                        help="fetch only the satellite segmentation for this cell "
+                             "(billed once, then cached forever) and skip the "
+                             "hourly heat layers.")
     parser.add_argument("--resume", metavar="ACTIVITY_ID",
                         help="adopt an already-submitted activity into the cache "
                              "instead of submitting a new one. Free — the job was "
@@ -260,8 +289,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if ok else 1
 
+    if args.shade_only:
+        log.info("Fetching segmentation for cell %.5f,%.5f…", cell[0], cell[1])
+        fraction = warm_shade(args.latitude, args.longitude)
+        if fraction is None:
+            log.error("No shade data for this cell.")
+            return 1
+        log.info("Done — %.0f%% canopy-weighted shade.", fraction * 100)
+        return 0
+
     log.info("Warming cell %.5f,%.5f (%d hour(s))…", cell[0], cell[1], args.hours)
     warmed = warm_cell(args.latitude, args.longitude, hours=args.hours)
+    fraction = warm_shade(args.latitude, args.longitude)
+    if fraction is not None:
+        log.info("Shade: %.0f%% canopy-weighted.", fraction * 100)
     log.info("Done — %d of %d hour(s) warm.", warmed, args.hours)
     return 0 if warmed else 1
 

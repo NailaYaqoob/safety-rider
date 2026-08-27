@@ -95,6 +95,47 @@ Reply with a destination and the service compares candidate paths by
 >
 > About 10 min longer, but roughly **6.0 fewer °C-hours** of high heat.
 
+### Shade, from satellite segmentation
+
+Air temperature is not the whole of what a rider feels. Two streets can measure
+the same 2 m air temperature while one runs under continuous tree canopy and
+the other is open asphalt in direct sun — the radiant load on a body differs
+enormously. `POST /v1/satellite` classifies land cover, so the canopy share of
+each cell along a route feeds the ranking:
+
+> 🧭 **Cooler route found**
+>
+> Direct: 8.0 km, 30 min, peak 40.2 °C, partly shaded
+> Cooler: 8.6 km, 33 min, peak 40.2 °C, mostly shaded
+
+A fully-canopied cell is scored as if it were `SAFETY_RIDER_SHADE_EQUIVALENT_C`
+degrees cooler (default 3 °C). That number is a **modelling assumption, stated
+as one** — air under canopy is barely cooler, but radiant load is far lower,
+and this is the one knob that says so without pretending to a
+mean-radiant-temperature model.
+
+Three limits, because a safety tool that overstates itself is worse than none:
+
+- **It is not a shadow model.** No sun angle, no time of day, no knowledge of
+  which side of a building a rider is on. It is the canopy fraction of a ~100 m
+  tile: a decent proxy for "this block is shaded", a poor one for "this metre
+  is".
+- **Shade never changes a safety verdict.** It ranks routes. The band a rider
+  is told is decided on measured air temperature at their own position, and the
+  temperature they are shown is never the shade-adjusted one. A model that let
+  a leafy street talk 41 °C down into Warning would be inventing safety out of
+  an assumption.
+- **Bare asphalt is a measurement; an unfamiliar class list is not.** The API
+  returns its own vocabulary, so classes are matched by substring. When nothing
+  is recognised the answer is "unknown", not a confident zero — but a cell of
+  recognised paving really is 0 % canopy, and that is the signal worth routing
+  around.
+
+Segmentation is Premium and billed, so the rider path reads it **cache-only**,
+like the nowcast. Land cover does not change, so a cell is paid for once and
+cached with no expiry — `python -m safety_rider.warm 33.4484 -112.0740
+--shade-only`, or automatically for every cell in `SAFETY_RIDER_WARM_CELLS`.
+
 Routes are scored in **degree-hours above the high-heat line** — the area under
 the curve, not the peak. A route touching 41 °C for thirty seconds is safer than
 one sitting at 37 °C for twenty minutes, and only cumulative exposure sees that.
@@ -388,6 +429,7 @@ safety_rider/
 ├── heat_risk.py             NOAA/OSHA thresholds, heat-index correction, and the
 │                            citation printed under every verdict.
 ├── routing.py               Candidate routes from OSRM, scored by heat exposure.
+├── shade.py                 Canopy per cell from satellite segmentation.
 ├── warm.py                  Pre-fetches hourly layers out of band, on an
 │                            in-process hourly schedule (see Cost control).
 ├── rate_limit.py            Per-rider budgets on messages and route requests.
@@ -473,12 +515,13 @@ python tests/test_heat_risk_live.py     #  27 checks
 python tests/test_rider_status.py       # 113 checks
 python tests/test_dashboard.py          #  82 checks
 python tests/test_routing.py            #  48 checks
+python tests/test_shade.py               #  37 checks
 python tests/test_rate_limit.py         #  45 checks
 python tests/test_warm.py               #  30 checks
 python tests/test_escalation.py         #  30 checks
 ```
 
-**433 checks**, no pytest required, all exit non-zero on failure. CI runs every
+**470 checks**, no pytest required, all exit non-zero on failure. CI runs every
 suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
