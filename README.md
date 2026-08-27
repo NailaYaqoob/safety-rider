@@ -358,6 +358,7 @@ safety_rider/
 │                            citation printed under every verdict.
 ├── routing.py               Candidate routes from OSRM, scored by heat exposure.
 ├── warm.py                  Pre-fetches hourly layers out of band (see Cost control).
+├── rate_limit.py            Per-rider budgets on messages and route requests.
 ├── events.py                Fan-out hub and rider registry for the dashboard.
 ├── config.py                Every setting, with the reasoning for each default.
 ├── whatsapp/
@@ -402,6 +403,25 @@ cell per hour whether one rider pins there or fifty. In production this runs on
 a schedule, one pass per hour per service area. `SAFETY_RIDER_NOWCAST=0` ignores
 the hourly layer entirely.
 
+**Each rider also has a budget.** Meta authenticates the *sender* of a webhook,
+not the rider inside it, so a valid signature says nothing about whether one
+number is pinning once an hour or once a second — and nothing else upstream
+bounds it. Riders get 12 messages per 5 minutes, and routing gets its own
+tighter budget of 4 per 15 minutes because a comparison prices several cells
+where a pin usually prices one.
+
+Three details matter more than the numbers:
+
+- **A throttled rider is told once, then not again.** Replying to every
+  throttled message would turn the limiter into a 1:1 amplifier — exactly the
+  spend it exists to stop.
+- **A refused route hands its general budget back**, so over-using route
+  comparison can never cost a rider the plain "is it safe here?" check. That is
+  the one path a cost control must not be able to close.
+- **The dispatcher sees it.** A rider suddenly hammering the service is as
+  likely to be someone in trouble tapping *send* as it is abuse, so the
+  throttle raises a console event rather than only a log line.
+
 ---
 
 ## Tests
@@ -412,9 +432,10 @@ python tests/test_heat_risk_live.py     #  27 checks
 python tests/test_rider_status.py       # 113 checks
 python tests/test_dashboard.py          #  68 checks
 python tests/test_routing.py            #  48 checks
+python tests/test_rate_limit.py         #  45 checks
 ```
 
-**286 checks**, no pytest required, all exit non-zero on failure. CI runs every
+**331 checks**, no pytest required, all exit non-zero on failure. CI runs every
 suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard
@@ -438,9 +459,12 @@ Stated plainly, because a safety tool that overstates itself is worse than none.
   rate-limited, has no uptime guarantee, and returns no alternatives — so
   candidates are generated here by routing via offset waypoints. Run your own
   OSRM instance before anyone depends on this.
-- **Single process.** The event hub and the message-dedup cache are both
-  in-memory. Running more than one worker silently splits riders between them;
-  both need Redis before scaling out. The rider registry — the last known
+- **Single process.** The event hub, the message-dedup cache and the rate-limit
+  windows are all in-memory. Running more than one worker silently splits
+  riders between them: a rider handled by worker B never appears on a dashboard
+  streaming from worker A, a Meta retry could be answered twice, and each rider
+  gets one budget per worker. All three want Redis at the same time. The rider
+  registry — the last known
   position a routing request is answered from — *is* persisted to disk and
   restored at startup, so a redeploy no longer tells a rider who pinned a
   minute ago that we have no idea where they are. Entries expire after 24

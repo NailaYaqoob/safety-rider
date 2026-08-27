@@ -230,6 +230,34 @@ class Settings:
         default_factory=lambda: max(1, int(_env("SAFETY_RIDER_MAX_ROUTE_CELLS") or 4))
     )
 
+    # ── Rate limiting (safety_rider/rate_limit.py) ─────────────────────────
+    #: Messages one rider may have acted on per :attr:`rate_window_s`. Meta
+    #: authenticates the sender of a webhook, not the rider inside it, so
+    #: nothing upstream bounds how often one number can spend billed heat
+    #: requests and outbound messages. Set to 0 to disable the limit entirely.
+    #:
+    #: 12 per 5 minutes is far above any human pattern — a rider shares a pin a
+    #: handful of times a shift — and well below what a script does.
+    rate_limit: int = field(
+        default_factory=lambda: int(_env("SAFETY_RIDER_RATE_LIMIT") or 12)
+    )
+
+    rate_window_s: float = field(
+        default_factory=lambda: float(_env("SAFETY_RIDER_RATE_WINDOW_S") or 300)
+    )
+
+    #: Routing requests get their own, tighter budget: one comparison prices up
+    #: to :attr:`max_route_cells` cells and each cold cell costs two billed
+    #: heatmap requests, so a route can cost an order of magnitude more than a
+    #: pin. 0 disables this budget; the general one above still applies.
+    route_rate_limit: int = field(
+        default_factory=lambda: int(_env("SAFETY_RIDER_ROUTE_RATE_LIMIT") or 4)
+    )
+
+    route_rate_window_s: float = field(
+        default_factory=lambda: float(_env("SAFETY_RIDER_ROUTE_RATE_WINDOW_S") or 900)
+    )
+
     # ── Dashboard / demo ───────────────────────────────────────────────────
     #: Set truthy to show riders' full phone numbers on the dashboard. Off by
     #: default because the dashboard is meant to be screen-shared.

@@ -29,6 +29,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, Query, Request, Response
 from ..config import settings
 from ..events import Event, RiderState, hub, mask_number
 from ..models import RiderLocation
+from ..rate_limit import (RateLimiter, throttle_message, throttle_route_message)
 from ..rider_status import RiderSafetyStatus, evaluate_rider_safety_status
 from ..routing import compare_routes
 from ..temperature_service import get_hyperlocal_temperature
@@ -48,6 +49,18 @@ router = APIRouter(prefix="/webhook/whatsapp", tags=["whatsapp"])
 #: Replace with Redis (SETNX + TTL) before running more than one instance.
 _SEEN_MESSAGE_IDS: OrderedDict[str, None] = OrderedDict()
 _SEEN_LIMIT = 2048
+
+
+#: Per-rider budgets. Two of them, because a routing request prices several
+#: grid cells while a pin usually prices one — see safety_rider/rate_limit.py.
+#: Module-level so the window survives between messages; in-process only, with
+#: the same one-worker caveat as the dedup cache above.
+_message_limiter = RateLimiter(
+    settings.rate_limit, settings.rate_window_s, name="message"
+)
+_route_limiter = RateLimiter(
+    settings.route_rate_limit, settings.route_rate_window_s, name="route"
+)
 
 
 def _already_processed(message_id: str) -> bool:
@@ -181,6 +194,12 @@ async def handle_message(message: InboundMessage) -> None:
           -> Graph API text reply              # tailored to the band
     """
     try:
+        # Budget first, before any Graph call. Even a read receipt is a
+        # request, and under a flood the cheapest correct behaviour is to do
+        # nothing at all rather than to do something cheap very often.
+        if not await _within_budget(message):
+            return
+
         await _safe_graph_call(
             graph_client.mark_as_read(message.message_id), "read receipt"
         )
@@ -206,6 +225,46 @@ async def handle_message(message: InboundMessage) -> None:
 
     except Exception:  # noqa: BLE001 — background task: log, never propagate.
         log.exception("Failed to handle message %s", message.message_id)
+
+
+async def _within_budget(message: InboundMessage) -> bool:
+    """Check the rider's message budget, replying at most once per window.
+
+    Returns True to proceed. On the first rejection the rider is told what
+    happened and when to come back; on every rejection after that, in the same
+    window, nothing is sent. Replying each time would make the limiter a 1:1
+    message amplifier and spend exactly what it exists to protect.
+
+    The throttle is also published to the dashboard, once. A rider suddenly
+    hammering the service is worth a dispatcher's attention — it is as likely
+    to be someone in trouble tapping *send* repeatedly as it is abuse.
+    """
+    decision = _message_limiter.check(message.from_number)
+    if decision.allowed:
+        return True
+
+    if decision.should_notify:
+        await _safe_graph_call(
+            graph_client.send_text(
+                message.from_number, throttle_message(decision.retry_after_s)
+            ),
+            "throttle notice",
+        )
+        hub.publish(Event(
+            kind="system",
+            text=(
+                f"Rider {_display_id(message.from_number)} is sending faster "
+                f"than the {settings.rate_limit}-per-"
+                f"{settings.rate_window_s:.0f}s budget allows — throttled for "
+                f"{decision.retry_after_s}s."
+            ),
+            status="unknown",
+            rider_id=_display_id(message.from_number),
+        ))
+    else:
+        log.info("Dropped a throttled message from %s (%s).",
+                 message.from_number, message.message_id)
+    return False
 
 
 async def _evaluate_and_reply(message: InboundMessage, location: RiderLocation) -> None:
@@ -270,6 +329,27 @@ async def _compare_and_reply(message: InboundMessage, destination: RiderLocation
     tracking. Asking them to re-send it would be the kind of friction that
     stops a courier using the thing at all.
     """
+    # Routing has its own, tighter budget on top of the message one: a single
+    # comparison prices several grid cells, and a cold cell is two billed
+    # heatmap requests. Checked before the origin lookup so a rider without a
+    # known position cannot spend route budget discovering that.
+    route_decision = _route_limiter.check(message.from_number)
+    if not route_decision.allowed:
+        # Hand back the general message slot this request consumed on the way
+        # in. It bought no work, and the general budget is what the plain
+        # safety check runs on — a rider must not be able to lose "is it safe
+        # here?" by over-using route comparison.
+        _message_limiter.refund(message.from_number)
+        if route_decision.should_notify:
+            await _safe_graph_call(
+                graph_client.send_text(
+                    message.from_number,
+                    throttle_route_message(route_decision.retry_after_s),
+                ),
+                "route throttle notice",
+            )
+        return
+
     origin = _last_known_location(message.from_number)
     if origin is None:
         await _safe_graph_call(
