@@ -14,6 +14,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 # makes billable calls. Empty strings rather than pops: an unset name lets
 # config.py's load_dotenv() refill it from .env, while an empty value is
 # "present" to dotenv and "unset" to config._env().
+# The hub persists its rider registry to disk; point it at a throwaway file so
+# the suite never writes test riders into the repo's real data/ directory.
+import tempfile as _tempfile
+os.environ["SAFETY_RIDER_REGISTRY_PATH"] = str(
+    pathlib.Path(_tempfile.mkdtemp(prefix="safety-rider-test-")) / "riders.json")
+
 os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
 os.environ["SAFETY_RIDER_MOCK_TEMPERATURE"] = "1"
 os.environ["WHATSAPP_VERIFY_TOKEN"] = "test-verify-token"
@@ -421,6 +427,40 @@ print(evaluate_rider_safety_status(
     hours_above_threshold=demo_reading.hours_above_threshold,
 ).to_whatsapp_text(demo_reading))
 os.environ.pop("SAFETY_RIDER_MOCK_TEMP_C", None)
+
+print("\n[14] Every verdict names the published threshold it rests on")
+# The bands are ours; the line underneath them is NOAA's and OSHA's. An
+# operator defending a stopped shift repeats the published figure, not our
+# band name — so the verdict has to carry it.
+from safety_rider.heat_risk import (DANGER_C, NOAA_CAUTION_C, NOAA_EXTREME_C,
+                                    OSHA_HIGH_C, cite)
+
+check("Danger cites the NOAA Danger onset",
+      "NOAA Danger" in (evaluate_rider_safety_status(41.5).citation or ""))
+check("a reading over the OSHA line cites OSHA",
+      "OSHA" in (evaluate_rider_safety_status(36.0).citation or ""))
+check("the citation carries the actual number, not just a name",
+      str(DANGER_C) in (evaluate_rider_safety_status(41.5).citation or ""))
+check("and gives it in Fahrenheit too, for a US operator",
+      "103" in (evaluate_rider_safety_status(41.5).citation or ""))
+
+check("an ordinary day cites nothing rather than inventing a near miss",
+      evaluate_rider_safety_status(20.0).citation is None)
+check("cite() is None below the lowest published line", cite(NOAA_CAUTION_C - 0.1) is None)
+check("and names Caution exactly at it", "NOAA Caution" in (cite(NOAA_CAUTION_C) or ""))
+check("an unknown reading has no threshold to cite",
+      evaluate_rider_safety_status(None).citation is None)
+
+# Each published line, in order, must be the one named at its own edge.
+for value, expected in ((DANGER_C, "NOAA Danger"), (OSHA_HIGH_C, "OSHA"),
+                        (NOAA_EXTREME_C, "Extreme Caution"), (NOAA_CAUTION_C, "NOAA Caution")):
+    check(f"{value} C -> {expected}", expected in (cite(value) or ""))
+
+body = evaluate_rider_safety_status(41.5, hours_above_threshold=10.0).to_whatsapp_text()
+check("the rider's own message shows the threshold", "Threshold:" in body)
+check("and it names NOAA Danger there", "NOAA Danger" in body)
+check("a safe day's message stays uncluttered by it",
+      "Threshold:" not in evaluate_rider_safety_status(20.0).to_whatsapp_text())
 
 print("\n" + ("ALL ENGINE CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
 raise SystemExit(0 if ok else 1)

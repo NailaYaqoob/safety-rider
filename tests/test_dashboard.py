@@ -2,9 +2,15 @@
 
 Run:  venv/bin/python tests/test_dashboard.py
 """
-import json, os, pathlib, sys
+import json, os, pathlib, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+# The hub now persists its rider registry, so point it at a throwaway file
+# BEFORE importing anything — otherwise the suite writes test riders into the
+# repo's real data/ directory.
+_REGISTRY_DIR = tempfile.mkdtemp(prefix="safety-rider-test-")
+os.environ["SAFETY_RIDER_REGISTRY_PATH"] = str(pathlib.Path(_REGISTRY_DIR) / "riders.json")
 
 # Offline and non-sending, pinned BEFORE the app import. See tests/README.md.
 os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
@@ -19,7 +25,8 @@ os.environ["WHATSAPP_PHONE_NUMBER_ID"] = ""
 from fastapi.testclient import TestClient
 
 from safety_rider.app import app
-from safety_rider.events import Event, Hub, RiderState, hub, mask_number
+from safety_rider.events import (REGISTRY_PATH, REGISTRY_TTL, Event, Hub,
+                                 RiderState, hub, mask_number)
 
 client = TestClient(app)
 ok = True
@@ -213,6 +220,75 @@ check("delivered=None makes no delivery claim at all",
 
 check("the reading itself still reaches the feed",
       "41.5" in sent_text and "41.5" in failed_text and "41.5" in none_text)
+
+print("\n[11] The rider registry survives a restart")
+# A routing request is answered from the rider's last known position. That used
+# to live only in memory, so any redeploy told a rider who pinned thirty
+# seconds ago that we had no idea where they were — and Railway redeploys often
+# during a hackathon.
+from datetime import datetime, timedelta, timezone
+
+fresh = Hub()
+fresh.upsert_rider(RiderState(rider_id="+1602****740", latitude=33.4484,
+                              longitude=-112.0740, status="danger",
+                              temperature_c=41.5))
+check("upserting a rider writes the registry to disk", REGISTRY_PATH.exists())
+
+reborn = Hub()
+check(f"a new process restores it (got {reborn.load()})", reborn.find_rider("+1602****740") is not None)
+restored_rider = reborn.find_rider("+1602****740")
+check("position survives intact",
+      restored_rider.latitude == 33.4484 and restored_rider.longitude == -112.0740)
+check("so does the band it was last evaluated in", restored_rider.status == "danger")
+
+stale_at = (datetime.now(timezone.utc) - REGISTRY_TTL - timedelta(minutes=1)).isoformat()
+reborn.upsert_rider(RiderState(rider_id="stale", latitude=1.0, longitude=2.0,
+                               updated_at=stale_at))
+aged = Hub(); aged.load()
+check("a position past the TTL is dropped, not served", aged.find_rider("stale") is None)
+check("while a fresh one is kept", aged.find_rider("+1602****740") is not None)
+check("and the expired row is purged from disk too",
+      "stale" not in REGISTRY_PATH.read_text(encoding="utf-8"))
+
+REGISTRY_PATH.write_text("{ this is not json", encoding="utf-8")
+salvaged = Hub()
+check("a corrupt registry is a cold boot, not a crash", salvaged.load() == 0)
+
+REGISTRY_PATH.unlink(missing_ok=True)
+check("a missing registry is also fine", Hub().load() == 0)
+
+print("\n[12] A route comparison reaches the map, not just the feed")
+from safety_rider.routing import RouteCandidate, RouteComparison
+
+hub.clear()
+check("no route before one is computed",
+      client.get("/api/dashboard/state").json()["route"] is None)
+
+fast = RouteCandidate("Direct", 8000, 1800,
+                      coordinates=[[-112.07, 33.44 + i * 0.001] for i in range(300)])
+cool = RouteCandidate("Detour 1", 11000, 2400,
+                      coordinates=[[-112.09, 33.44 + i * 0.001] for i in range(300)])
+fast.peak_c, fast.degree_hours, fast.coverage = 44.2, 6.5, 1.0
+cool.peak_c, cool.degree_hours, cool.coverage = 30.2, 0.5, 1.0
+comparison = RouteComparison(fast, cool, [fast, cool], True, "saves 6.00 C·h for 10 min extra")
+
+hub.publish(Event(kind="route", text="Rider +1602****740 requested a route.",
+                  status="warning", rider_id="+1602****740",
+                  route=comparison.to_map_payload()))
+
+state = client.get("/api/dashboard/state").json()
+check("a dashboard opened AFTER the comparison still paints it", state["route"] is not None)
+check("both legs survive the round trip",
+      "fastest" in state["route"] and "coolest" in state["route"])
+check("the geometry arrives with them", len(state["route"]["fastest"]["path"]) > 1)
+check("the event in history carries it too",
+      any(e.get("route") for e in state["events"] if e["kind"] == "route"))
+check("evaluations do NOT carry route geometry",
+      all(e.get("route") is None for e in state["events"] if e["kind"] != "route"))
+
+hub.clear()
+check("reset clears the route with everything else",
+      client.get("/api/dashboard/state").json()["route"] is None)
 
 hub.clear()
 print("\n" + ("ALL DASHBOARD CHECKS PASSED" if ok else "SOME CHECKS FAILED"))

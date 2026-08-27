@@ -49,6 +49,33 @@ MAX_DETOUR_RATIO = 1.6
 #: Below this, two routes are the same road and offering both is noise.
 MIN_DEGREE_HOURS_GAIN = 0.15
 
+#: A detour must be priced over at least this much of itself before it can be
+#: recommended. Unmeasured ground scores as zero exposure, so without a floor
+#: the coolest-looking route is the one that left coverage. Candidates are also
+#: held to the fastest route's own coverage, so a comparison where nothing is
+#: well measured still returns the best of what there is rather than nothing.
+MIN_COVERAGE = 0.5
+
+#: Vertices kept per route when a comparison is sent to the dashboard. OSRM
+#: returns 500–800 points for a city crossing, which is far more resolution
+#: than a browser can show and more JSON than an SSE frame should carry.
+MAX_DISPLAY_POINTS = 150
+
+
+def _thin(coordinates: list[list[float]], limit: int) -> list[list[float]]:
+    """Evenly drop vertices until at most ``limit`` remain.
+
+    Endpoints are always kept, so a thinned line still starts and ends where
+    the route does — a detour whose destination drifted would be worse than no
+    line at all.
+    """
+    if limit < 2 or len(coordinates) <= limit:
+        return list(coordinates)
+    step = (len(coordinates) - 1) / (limit - 1)
+    picked = [coordinates[round(i * step)] for i in range(limit)]
+    picked[-1] = coordinates[-1]
+    return picked
+
 
 @dataclass
 class RouteCandidate:
@@ -65,6 +92,10 @@ class RouteCandidate:
     peak_c: float | None = None
     mean_c: float | None = None
     cells_sampled: int = 0
+    #: Fraction of the sampled cells that returned a usable temperature. Below
+    #: 1.0 the route leaves FortyGuard's coverage somewhere, and its score
+    #: describes only the part we could measure — see :func:`score_candidate`.
+    coverage: float = 0.0
     source: str = "unknown"
 
     @property
@@ -84,6 +115,7 @@ class RouteCandidate:
             "peak_c": self.peak_c,
             "mean_c": self.mean_c,
             "cells_sampled": self.cells_sampled,
+            "coverage": round(self.coverage, 2),
             "source": self.source,
             "coordinates": self.coordinates,
         }
@@ -129,6 +161,39 @@ class RouteComparison:
             "coolest": self.coolest.to_dict(),
             "candidates": [c.to_dict() for c in self.candidates],
         }
+
+    def to_map_payload(self, *, max_points: int = MAX_DISPLAY_POINTS) -> dict[str, Any]:
+        """A compact version for the dispatch console's map.
+
+        Deliberately not :meth:`to_dict`. A scored comparison carries every
+        vertex of every candidate — measured at 565–812 points each — and this
+        rides an SSE frame that a browser has to parse mid-demo. Only the two
+        routes a dispatcher acts on are sent, thinned to ``max_points``, in
+        Leaflet's ``[lat, lon]`` order rather than GeoJSON's.
+        """
+        def leg(candidate: RouteCandidate) -> dict[str, Any]:
+            return {
+                "label": candidate.label,
+                "path": [[lat, lon] for lon, lat in _thin(candidate.coordinates, max_points)],
+                "distance_km": round(candidate.distance_km, 2),
+                "duration_min": round(candidate.duration_min, 1),
+                "peak_c": candidate.peak_c,
+                "degree_hours": (None if candidate.degree_hours is None
+                                 else round(candidate.degree_hours, 2)),
+                "coverage": round(candidate.coverage, 2),
+            }
+
+        payload: dict[str, Any] = {
+            "worth_detour": self.worth_detour,
+            "reason": self.reason,
+            "fastest": leg(self.fastest),
+        }
+        # When no detour is worth it, fastest and coolest are the same object.
+        # Sending it twice would draw one line over itself and imply a choice
+        # the comparison did not actually offer.
+        if self.worth_detour and self.coolest is not self.fastest:
+            payload["coolest"] = leg(self.coolest)
+        return payload
 
 
 # ───────────────────────────────────────────────────────── candidate routes
@@ -296,6 +361,23 @@ def score_candidate(candidate: RouteCandidate, max_cells: int | None = None) -> 
     approximated as an equal share of the trip — routes here are short enough
     that speed is roughly constant, and the alternative is a per-segment
     traversal that costs more code than the extra precision is worth.
+
+    Two things the arithmetic has to get right:
+
+    **Which temperature.** Cells are scored on
+    :attr:`~safety_rider.temperature_service.TemperatureReading.decision_celsius`
+    — the same number the rider's own reply is banded on. Scoring on the daily
+    peak instead let one conversation say "41.5 °C right now" and then price a
+    route off a three-day-old 36 °C peak, which is the service disagreeing with
+    itself about the same block.
+
+    **The share denominator is cells sampled, not cells priced.** A route that
+    leaves coverage part-way has fewer readings than cells; dividing by the
+    readings would pour the whole trip's duration into the covered half and
+    invent exposure that was never measured. Unpriced cells contribute zero
+    instead, and :attr:`RouteCandidate.coverage` records how much of the route
+    that leaves unknown so :func:`compare_routes` can refuse to recommend a
+    detour that merely looks cool for lack of data.
     """
     from .heat_risk import OSHA_HIGH_C
 
@@ -313,16 +395,18 @@ def score_candidate(candidate: RouteCandidate, max_cells: int | None = None) -> 
             readings.append(reading)
 
     if not readings:
+        candidate.coverage = 0.0
         return candidate
 
     hours_total = candidate.duration_s / 3600.0
-    share = hours_total / len(readings)
+    share = hours_total / len(cells)
 
-    degree_hours = sum(max(0.0, r.celsius - OSHA_HIGH_C) * share for r in readings)
-    candidate.degree_hours = degree_hours
-    candidate.peak_c = round(max(r.celsius for r in readings), 1)
-    candidate.mean_c = round(sum(r.celsius for r in readings) / len(readings), 1)
+    temps = [r.decision_celsius for r in readings]
+    candidate.degree_hours = sum(max(0.0, t - OSHA_HIGH_C) * share for t in temps)
+    candidate.peak_c = round(max(temps), 1)
+    candidate.mean_c = round(sum(temps) / len(temps), 1)
     candidate.cells_sampled = len(readings)
+    candidate.coverage = len(readings) / len(cells)
     candidate.source = readings[0].source
     return candidate
 
@@ -352,10 +436,15 @@ def compare_routes(start: RiderLocation, end: RiderLocation) -> RouteComparison 
 
     fastest = min(scored, key=lambda c: c.duration_s)
 
-    # Only consider detours a rider would actually accept.
+    # Only consider detours a rider would actually accept — and only ones we
+    # measured about as well as the route we are comparing them against.
+    # An unpriced cell contributes zero degree-hours, so a candidate that
+    # wanders out of coverage scores low for the reason we cannot see it. Left
+    # unguarded, "cooler route found" would mean "route we know least about".
     acceptable = [
         c for c in scored
         if c.duration_s <= fastest.duration_s * MAX_DETOUR_RATIO
+        and c.coverage >= min(fastest.coverage, MIN_COVERAGE) - 1e-9
     ]
     coolest = min(acceptable or [fastest], key=lambda c: c.degree_hours or 0.0)
 

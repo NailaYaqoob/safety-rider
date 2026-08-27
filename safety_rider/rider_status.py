@@ -95,6 +95,11 @@ class RiderSafetyStatus:
     #: One line naming what escalated or held the band, for logs and audit.
     reason: str = ""
     hours_above_threshold: float | None = None
+    #: The published NOAA/OSHA threshold this reading crossed, from
+    #: :func:`safety_rider.heat_risk.cite`. None below the lowest one. This is
+    #: what an operator repeats when a warning is challenged — the bands above
+    #: are ours, but the line underneath them is somebody else's and published.
+    citation: str | None = None
 
     @property
     def fahrenheit(self) -> float | None:
@@ -153,6 +158,13 @@ class RiderSafetyStatus:
         if actions:
             lines.append("")
             lines.extend(f"• {action}" for action in actions)
+
+        # The threshold comes before provenance: a rider challenged by a
+        # dispatcher needs the published line first, and where the number came
+        # from second.
+        if self.citation and self.temperature_c is not None:
+            lines.append("")
+            lines.append(f"_Threshold: {self.citation}._")
 
         # Suppressed when there is no reading: the body has already given the
         # reason, and repeating it as provenance reads like a second failure.
@@ -215,6 +227,11 @@ def evaluate_rider_safety_status(
 
     actions = _actions_for(status, temp, hours_above_threshold)
 
+    # Local import: the bands above must stay evaluable with no network and no
+    # API key, and heat_risk pulls in the FortyGuard client at module level.
+    # cite() itself is pure arithmetic over published constants.
+    from .heat_risk import cite
+
     result = RiderSafetyStatus(
         status=status,
         temperature_c=round(temp, 1),
@@ -224,6 +241,7 @@ def evaluate_rider_safety_status(
         reroute=status is SafetyStatus.DANGER,
         reason=reason,
         hours_above_threshold=hours_above_threshold,
+        citation=cite(temp),
     )
     log.info("Safety evaluation: %s (%s)", result.status.value, result.reason)
     return result

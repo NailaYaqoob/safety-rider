@@ -318,6 +318,9 @@ async def _compare_and_reply(message: InboundMessage, destination: RiderLocation
         ),
         status="warning" if comparison.worth_detour else "info",
         rider_id=_display_id(message.from_number),
+        # The geometry, so dispatch sees the detour on the map rather than
+        # reading that one was offered and having to take our word for it.
+        route=comparison.to_map_payload(),
     ))
 
     await _safe_graph_call(
@@ -331,12 +334,18 @@ def _display_id(from_number: str) -> str:
 
 
 def _last_known_location(from_number: str) -> RiderLocation | None:
-    """The rider's most recent position, from the dashboard hub's registry."""
-    rider_id = _display_id(from_number)
-    for rider in hub.riders():
-        if rider["rider_id"] == rider_id:
-            return RiderLocation(rider["latitude"], rider["longitude"])
-    return None
+    """The rider's most recent position, from the hub's registry.
+
+    The registry is restored from disk at startup, so a rider who shared a pin
+    before the last redeploy can still ask for a route without re-sharing it.
+    Entries older than the registry TTL are dropped on load rather than served,
+    because routing someone from where they were yesterday is worse than
+    admitting we do not know.
+    """
+    rider = hub.find_rider(_display_id(from_number))
+    if rider is None:
+        return None
+    return RiderLocation(rider.latitude, rider.longitude)
 
 
 async def _trigger_rest_protocol(
@@ -444,6 +453,7 @@ def publish_evaluation(
         latitude=location.latitude,
         longitude=location.longitude,
         temperature_c=status.temperature_c,
+        citation=status.citation,
     ))
 
 

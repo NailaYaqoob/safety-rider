@@ -424,3 +424,35 @@ def classify(peak_temp_c: float, hours_above_threshold: float | None = None) -> 
         level = order[min(idx + 1, len(order) - 1)]
 
     return level
+
+
+#: The published line each band sits on, in the order :func:`classify` tests
+#: them. Kept beside the thresholds themselves so a renamed threshold cannot
+#: leave the citation pointing at a number that moved.
+_CITATIONS: tuple[tuple[float, str], ...] = (
+    (DANGER_C, "NOAA Danger"),
+    (OSHA_HIGH_C, "OSHA high-heat trigger"),
+    (NOAA_EXTREME_C, "NOAA Extreme Caution"),
+    (NOAA_CAUTION_C, "NOAA Caution"),
+)
+
+
+def cite(peak_temp_c: float | None) -> str | None:
+    """Name the highest published threshold ``peak_temp_c`` has crossed.
+
+    This is the sentence an operator repeats when a warning is questioned —
+    by a rider who thinks it is over-cautious, by a manager who paid for the
+    stopped shift, or by an inspector after an incident. "It felt hot" is not
+    defensible; "39.4 °C, the NOAA Danger onset" is, and it is the same figure
+    the repo's use-case notebooks cite.
+
+    Returns ``None`` below the lowest published line — there is no threshold to
+    name when nothing has been crossed, and inventing one ("below Caution")
+    would dress an ordinary day up as a near miss.
+    """
+    if peak_temp_c is None:
+        return None
+    for threshold, name in _CITATIONS:
+        if peak_temp_c >= threshold:
+            return f"{name}, ≥ {threshold} °C ({_f(threshold):.0f} °F)"
+    return None

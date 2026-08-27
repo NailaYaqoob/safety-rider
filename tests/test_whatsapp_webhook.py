@@ -10,6 +10,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 # Hard-disable the live heat path BEFORE importing the app. Without this the
 # webhook test picks up FORTYGUARD_API_KEY from .env and makes real, billable
 # API calls — which also makes the suite hang on the polling loop.
+# The hub persists its rider registry to disk; point it at a throwaway file so
+# the suite never writes test riders into the repo's real data/ directory.
+import tempfile as _tempfile
+os.environ["SAFETY_RIDER_REGISTRY_PATH"] = str(
+    pathlib.Path(_tempfile.mkdtemp(prefix="safety-rider-test-")) / "riders.json")
+
 os.environ["SAFETY_RIDER_LIVE_HEAT"] = "0"
 
 os.environ["WHATSAPP_VERIFY_TOKEN"] = "test-verify-token"

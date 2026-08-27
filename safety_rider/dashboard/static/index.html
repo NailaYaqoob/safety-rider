@@ -10,6 +10,10 @@
     --bg: #0d1117; --panel: #161b22; --line: #272e38;
     --text: #e6edf3; --muted: #8b949e;
     --safe: #2ea043; --warning: #d29922; --danger: #f85149; --unknown: #6e7681;
+    /* Route lines. The hot route reuses --danger so it reads as the same
+       alarm as a Danger marker; the cool one is a hue nothing else on the
+       page uses, so a dispatcher never has to ask which line is which. */
+    --route-hot: #f85149; --route-cool: #58a6ff;
   }
   * { box-sizing: border-box; }
   body {
@@ -95,12 +99,35 @@
   /* Respect users who get sick from motion; colour still distinguishes it. */
   @media (prefers-reduced-motion: reduce) { .rider.danger { animation: none; } }
 
+  .event cite {
+    display: block; margin-top: 4px; font-style: normal;
+    font-size: 11px; color: var(--muted); letter-spacing: .01em;
+  }
+
+  #route-legend {
+    position: absolute; left: 12px; bottom: 12px; z-index: 500;
+    background: rgba(22, 27, 34, .92); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; max-width: 260px;
+    font-size: 12px; color: var(--text);
+  }
+  #route-legend .route-key { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  #route-legend .route-key i { width: 18px; height: 3px; border-radius: 2px; flex: none; }
+  #route-legend p { margin: 6px 0 0; color: var(--muted); line-height: 1.4; }
+
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #161b22; color: var(--text); }
   .leaflet-popup-content { margin: 10px 12px; font-size: 13px; }
 </style>
 </head>
 <body>
   <div id="map"></div>
+
+  <!-- Hidden until a comparison arrives: a legend for lines that are not on
+       the map yet is just clutter a judge has to read past. -->
+  <div id="route-legend" hidden>
+    <div class="route-key"><i style="background:var(--route-hot)"></i><span id="leg-hot">Direct</span></div>
+    <div class="route-key"><i style="background:var(--route-cool)"></i><span id="leg-cool">Cooler</span></div>
+    <p id="leg-note"></p>
+  </div>
 
   <aside>
     <header>
@@ -148,6 +175,7 @@ const API = {
 
 const markers = {};        // rider_id -> Leaflet marker
 let map, devTools = true;
+let routeLayer = null;     // Leaflet group holding the current comparison
 
 /* ── map ─────────────────────────────────────────────────────────────────── */
 
@@ -233,7 +261,10 @@ function addEvent(e, { prepend = true } = {}) {
   const el = document.createElement("div");
   el.className = `event ${e.status || "info"}`;
   const when = e.at ? new Date(e.at) : new Date();
-  el.innerHTML = `<time>${when.toLocaleTimeString()}</time>${escapeHtml(e.text)}`;
+  // The citation is the line an operator repeats when a stopped shift is
+  // questioned, so it belongs on screen next to the alert rather than in a doc.
+  const cite = e.citation ? `<cite>${escapeHtml(e.citation)}</cite>` : "";
+  el.innerHTML = `<time>${when.toLocaleTimeString()}</time>${escapeHtml(e.text)}${cite}`;
   prepend ? feed.prepend(el) : feed.append(el);
   while (feed.children.length > 200) feed.lastChild.remove();
 }
@@ -242,6 +273,85 @@ function addEvent(e, { prepend = true } = {}) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+
+/* ── cooler-route comparison ─────────────────────────────────────────────── */
+/* The comparison is the part of the product a dispatcher acts on, and it used
+   to arrive as a line of text: "cooler option found" with nothing on the map
+   to look at. The routes are drawn so the detour can be judged rather than
+   taken on trust. */
+
+function legFor(leg, colour, { dashed = false } = {}) {
+  // Two lines: a wide dark casing under a coloured core. Without it a route
+  // crossing a dark basemap tile at speed is nearly invisible, and the two
+  // candidates run alongside each other for most of their length.
+  const casing = L.polyline(leg.path, { color: "#0d1117", weight: 9, opacity: .85 });
+  const core = L.polyline(leg.path, {
+    color: colour, weight: 4, opacity: .95,
+    dashArray: dashed ? "8 7" : null, lineJoin: "round", lineCap: "round",
+  });
+  const peak = leg.peak_c == null ? "—" : `${leg.peak_c.toFixed(1)} °C`;
+  const dh = leg.degree_hours == null ? "—" : `${leg.degree_hours.toFixed(2)} °C·h`;
+  // Coverage below 1 means the route left FortyGuard's area somewhere, and its
+  // score only describes the part we could measure. Say so on the line itself
+  // rather than letting a partially-blind score pass as a full one.
+  const gap = leg.coverage != null && leg.coverage < 1
+    ? `<br><small>only ${Math.round(leg.coverage * 100)}% of this route is inside coverage</small>` : "";
+  core.bindPopup(
+    `<b>${escapeHtml(leg.label)}</b><br>${leg.distance_km} km · ${leg.duration_min} min` +
+    `<br>Peak ${peak}<br>Exposure ${dh}${gap}`);
+  return [casing, core];
+}
+
+function drawRoute(route) {
+  if (!map) return;
+  // One comparison on screen at a time. Leaving the previous one up would
+  // stack detours from different riders into an unreadable tangle.
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+
+  const legend = document.getElementById("route-legend");
+  if (!route || !route.fastest || !route.fastest.path || route.fastest.path.length < 2) {
+    legend.hidden = true;
+    return;
+  }
+
+  const layers = [];
+  const cool = route.coolest;
+  // Resolved from the stylesheet, never passed as var(): Leaflet writes the
+  // colour into an SVG stroke attribute, where var() is not portable and
+  // renders black — which would make both routes the same line.
+  const HOT = ink("--route-hot"), COOL = ink("--route-cool");
+  // With no worthwhile detour the direct route IS the recommendation, so it is
+  // drawn in the cool colour. Painting it red would tell a dispatcher the only
+  // available route is dangerous when the comparison said the opposite.
+  layers.push(...legFor(route.fastest, cool ? HOT : COOL, { dashed: !!cool }));
+  if (cool) layers.push(...legFor(cool, COOL));
+
+  routeLayer = L.layerGroup(layers).addTo(map);
+  map.fitBounds(L.latLngBounds((cool ? cool.path : []).concat(route.fastest.path)).pad(0.2));
+
+  document.getElementById("leg-hot").textContent =
+    `${route.fastest.label} — ${route.fastest.duration_min} min` +
+    (route.fastest.peak_c != null ? `, peak ${route.fastest.peak_c.toFixed(1)} °C` : "");
+  const hotKey = document.getElementById("leg-hot").parentElement;
+  const coolKey = document.getElementById("leg-cool").parentElement;
+  if (cool) {
+    coolKey.hidden = false;
+    document.getElementById("leg-cool").textContent =
+      `${cool.label} — ${cool.duration_min} min` +
+      (cool.peak_c != null ? `, peak ${cool.peak_c.toFixed(1)} °C` : "");
+    hotKey.hidden = false;
+  } else {
+    // Nothing to contrast against: show one key, in the colour actually drawn.
+    coolKey.hidden = true;
+    hotKey.hidden = false;
+    hotKey.querySelector("i").style.background = "var(--route-cool)";
+  }
+  if (cool) hotKey.querySelector("i").style.background = "var(--route-hot)";
+
+  document.getElementById("leg-note").textContent = route.reason || "";
+  legend.hidden = false;
 }
 
 /* ── live stream ─────────────────────────────────────────────────────────── */
@@ -256,6 +366,9 @@ function connect() {
     const e = JSON.parse(ev.data);
     addEvent(e);
     pushReading(e);
+    // A route event repaints the map; it carries no rider position, so it is
+    // handled before the marker branch below rather than inside it.
+    if (e.route) drawRoute(e.route);
     if (e.latitude != null && e.rider_id) {
       upsertRider({
         rider_id: e.rider_id, latitude: e.latitude, longitude: e.longitude,
@@ -488,6 +601,9 @@ document.getElementById("btn-reset").onclick = async () => {
   initMap(s.center);
   s.riders.forEach(upsertRider);
   frameRiders();
+  // After frameRiders, so a comparison's bounds win over the rider framing —
+  // if there is a route on screen, that is what the dispatcher is looking at.
+  if (s.route) drawRoute(s.route);
   // history() is oldest-first, which is the order the chart wants; the feed
   // appends in the same pass so both read from one traversal.
   s.events.forEach(e => {

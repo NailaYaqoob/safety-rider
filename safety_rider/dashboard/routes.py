@@ -55,6 +55,10 @@ async def dashboard_state() -> dict:
     return {
         "riders": hub.riders(),
         "events": hub.history(),
+        # The last comparison, so a dashboard opened after it ran still paints
+        # the routes instead of showing a bare map next to a feed line about
+        # a detour nobody can see.
+        "route": hub.last_route(),
         "center": {"lat": settings.map_center_lat, "lon": settings.map_center_lon},
         "dev_tools": settings.dev_tools,
         "demo_number_configured": bool(settings.demo_number),

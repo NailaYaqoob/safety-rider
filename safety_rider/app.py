@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import ConfigurationError, settings, validate_startup
 from .dashboard import router as dashboard_router
 from .dashboard.routes import STATIC as DASHBOARD_STATIC
+from .events import hub
 from .whatsapp import router as whatsapp_router
 
 logging.basicConfig(
@@ -65,6 +66,13 @@ async def _startup() -> None:
         )
     if not settings.fortyguard_api_key:
         log.warning("FORTYGUARD_API_KEY is not set — heat risk will use stub data.")
+    restored = hub.load()
+    if restored:
+        log.info(
+            "Restored %d rider(s) from the last run — a routing request can be "
+            "answered without asking them to re-share their location.",
+            restored,
+        )
     if settings.dev_tools:
         log.warning(
             "Dev tools ENABLED: POST /api/dashboard/simulate sends a real "
