@@ -1,0 +1,16 @@
+# Canonical identity for this repository.
+#
+# The history carries two addresses for the same person: the 22 Aug commits
+# were made before the git identity here was set, and everything from 23 Aug
+# onward uses the address in `git config user.email`. Left alone, `git
+# shortlog -sne` and `git blame` split one author into two, which reads as two
+# contributors on a project that has one.
+#
+# This only affects git's own output — shortlog, log, blame. GitHub does not
+# read .mailmap: it attaches a commit to an account by matching the commit
+# email against the verified addresses on that account. Both of these are
+# already verified on @NailaYaqoob, which is why the contributors graph
+# correctly shows a single person with every commit.
+#
+# Format:  Canonical Name <canonical@email> <other@email>
+Naila Yaqoob <nailayaqoob86@gmail.com> <nailaimran8686@gmail.com>
