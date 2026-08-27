@@ -49,7 +49,21 @@ KEEPALIVE_SECONDS = 20.0
 
 @router.get("/dashboard", include_in_schema=False)
 async def dashboard_page() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+    """The console itself.
+
+    ``no-cache`` means "revalidate before reusing", not "never store": the
+    browser still sends its ETag and still gets a cheap 304 when nothing has
+    changed. Without it the response carried only an ETag and a Last-Modified,
+    and browsers are free to *heuristically* cache that — which they did. A
+    redeploy went out, the page kept rendering from disk, and the fix appeared
+    not to have shipped. On a page whose whole job is showing live state, and
+    which gets reloaded in front of an audience, serving yesterday's HTML is
+    the wrong default.
+    """
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/api/dashboard/state")
