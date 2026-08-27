@@ -35,7 +35,13 @@ Each one is a way the demo dies on camera.
 5. **Blur or replace the phone number** in every WhatsApp frame.
 6. **Dry-run the whole thing once, timed.** If a shot runs long it's Shot 4
    (routing) that gets trimmed, not the rider reply.
-7. **Coverage is U.S.-only.** Every coordinate on screen must be a U.S. city.
+7. **Do not claim shade routing on camera.** The canopy scoring is in the
+   code and tested, but `/v1/satellite` is Premium-only and this key is on the
+   Hackathon plan, so no route in the demo is ranked by shade. Say "routes by
+   measured street-level temperature" — which is exactly what a judge will see
+   happen. If you want to mention shade at all, mention it as built and gated
+   by tier; that reads far better than a claim a judge can probe.
+8. **Coverage is U.S.-only.** Every coordinate on screen must be a U.S. city.
    Phoenix is FortyGuard's own example — use it.
 
 **If inbound WhatsApp still isn't delivering** (Meta has never POSTed to the
