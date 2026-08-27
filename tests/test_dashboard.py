@@ -59,8 +59,14 @@ print("\n[3] State endpoint")
 hub.clear()
 s = client.get("/api/dashboard/state").json()
 check("has riders/events/center", {"riders","events","center"} <= set(s))
-check(f"centre defaults to San Jose ({s['center']['lat']}, {s['center']['lon']})",
-      abs(s["center"]["lat"] - 37.3318) < 0.01)
+# Phoenix, not a coastal default: this is a heat product, and the first frame
+# of the demo must not be a green map.
+check(f"centre defaults to Phoenix ({s['center']['lat']}, {s['center']['lon']})",
+      abs(s["center"]["lat"] - 33.4484) < 0.01
+      and abs(s["center"]["lon"] - (-112.0740)) < 0.01)
+check("and the default sits inside FortyGuard's US coverage",
+      __import__("safety_rider.heat_layer", fromlist=["is_in_coverage"])
+      .is_in_coverage(s["center"]["lat"], s["center"]["lon"]))
 check("starts empty after clear", s["riders"] == [] and s["events"] == [])
 check("reports mock mode so the UI can label it", s["mock_mode"] is True)
 

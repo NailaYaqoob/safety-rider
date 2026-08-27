@@ -468,17 +468,17 @@ Three details matter more than the numbers:
 ## Tests
 
 ```bash
-python tests/test_whatsapp_webhook.py   #  30 checks
+python tests/test_whatsapp_webhook.py   #  58 checks
 python tests/test_heat_risk_live.py     #  27 checks
 python tests/test_rider_status.py       # 113 checks
-python tests/test_dashboard.py          #  81 checks
+python tests/test_dashboard.py          #  82 checks
 python tests/test_routing.py            #  48 checks
 python tests/test_rate_limit.py         #  45 checks
 python tests/test_warm.py               #  30 checks
 python tests/test_escalation.py         #  30 checks
 ```
 
-**404 checks**, no pytest required, all exit non-zero on failure. CI runs every
+**433 checks**, no pytest required, all exit non-zero on failure. CI runs every
 suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard

@@ -149,5 +149,55 @@ check("outbound stayed unconfigured -> no live Graph calls",
 
 print("\n--- sample reply body ---")
 print(risk.to_whatsapp_text())
+print("\\n[7] Coordinates as riders actually type them")
+# Found in real use: a rider sent "33.4484,  -112.0740." and got the location
+# prompt back, because the sentence-ending full stop left something after the
+# number and the pattern was anchored. They had done nothing wrong. WhatsApp
+# Web has no location button at all, so typed coordinates are the ONLY way in
+# from a laptop — this path failing means the service is unusable there.
+from safety_rider.whatsapp.parser import coordinates_from_text, destination_from_text
+
+PHX = (33.4484, -112.0740)
+for raw in ["33.4484, -112.0740",
+            "33.4484,  -112.0740.",          # the one that actually failed
+            "33.4484,-112.0740",
+            "33.4484 -112.0740",
+            "  33.4484 , -112.0740  ",
+            "33.4484/-112.0740",
+            "(33.4484, -112.0740)",
+            "33.4484\u00b0, -112.0740\u00b0",
+            "lat 33.4484 lon -112.0740",
+            "Latitude: 33.4484 Longitude: -112.0740",
+            "Latitude: 33.4484\nLongitude: -112.0740",
+            "33.4484, -112.0740!"]:
+    got = coordinates_from_text(raw)
+    check(f"parses {raw!r}",
+          got is not None and abs(got.latitude - PHX[0]) < 1e-6
+          and abs(got.longitude - PHX[1]) < 1e-6)
+
+# The anchors are what stop a sentence with two numbers in it becoming a
+# position. Loosening the decoration must not loosen that.
+for raw in ["hi", "in 5, 10 minutes", "call me at 5", "see you 12, 30",
+            "meet at 33.4 and 5 pm please", "how hot is it?"]:
+    check(f"refuses {raw!r}", coordinates_from_text(raw) is None)
+
+check("out-of-range latitude is refused", coordinates_from_text("933.4, -112.0") is None)
+check("out-of-range longitude is refused", coordinates_from_text("33.4, -999.0") is None)
+check("empty text is refused", coordinates_from_text("") is None)
+check("None is refused", coordinates_from_text(None) is None)
+
+# Destinations get the same tolerance — a rider who ends the line with a full
+# stop meant the same thing there too.
+for raw in ["to 33.4484,-112.0740.", "-> 33.4484 -112.0740",
+            "dest: 33.4484, -112.0740", "TO 33.4484, -112.0740"]:
+    got = destination_from_text(raw)
+    check(f"routing request parses {raw!r}",
+          got is not None and abs(got.latitude - PHX[0]) < 1e-6)
+
+check("a bare pair is NOT a routing request",
+      destination_from_text("33.4484, -112.0740") is None)
+check("and a routing request is NOT a position",
+      coordinates_from_text("to 33.4484, -112.0740") is None)
+
 print("\n" + ("ALL CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
 raise SystemExit(0 if ok else 1)

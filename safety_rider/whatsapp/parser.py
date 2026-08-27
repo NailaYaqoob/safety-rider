@@ -157,12 +157,49 @@ def iter_inbound_messages(payload: dict[str, Any]) -> Iterator[InboundMessage]:
                 )
 
 
-#: ``37.3318, -121.8899`` and friends: optional sign, optional decimals, any
-#: mix of comma/whitespace/slash between them. Anchored at both ends so a
-#: sentence that merely *contains* two numbers ("in 5, 10 minutes") is ignored.
+#: Coordinates as a rider actually types them.
+#:
+#: The first version anchored a bare ``lat,lon`` pair at both ends, which is
+#: right about one thing — a sentence that merely *contains* two numbers ("in
+#: 5, 10 minutes") must not be read as a position — and wrong about everything
+#: else. Observed in real use: ``33.4484,  -112.0740.`` failed, because the
+#: sentence-ending full stop left something after the number, and the rider had
+#: done nothing wrong. So did ``Latitude: 33.2672 Longitude: -97.7431``, which
+#: is exactly what a phone's "copy coordinates" produces.
+#:
+#: Both now parse. What still does not, deliberately, is a pair of numbers
+#: buried in prose: the anchors stay, only the tolerated decoration grows.
+_NUMBER = r"[-+]?\d{1,3}(?:\.\d+)?"
+
 _COORD_RE = re.compile(
-    r"^\s*(?P<lat>[-+]?\d{1,2}(?:\.\d+)?)\s*[,;/\s]\s*(?P<lon>[-+]?\d{1,3}(?:\.\d+)?)\s*$"
+    r"^[\s(\[]*"                                  # stray opening bracket
+    r"(?:lat(?:itude)?\s*[:=]?\s*)?"              # optional "Latitude:"
+    rf"(?P<lat>{_NUMBER})\s*°?"                    # 33.4484, maybe with a degree sign
+    r"[\s,;/|]+"                                   # comma, slash, newline, or just space
+    r"(?:lon(?:g(?:itude)?)?\s*[:=]?\s*)?"        # optional "Longitude:"
+    rf"(?P<lon>{_NUMBER})\s*°?"                    # -112.0740
+    r"[\s.,!?)\]]*$",                             # trailing punctuation the rider typed
+    re.IGNORECASE,
 )
+
+
+def _coordinates(match: "re.Match[str] | None", *, name: str) -> RiderLocation | None:
+    """Turn a regex match into a validated :class:`RiderLocation`, or None.
+
+    Shared by the position and destination parsers so the two cannot drift on
+    bounds checking — the check that stops a transposed pair reaching the
+    geometry layer, where it fails in a much less obvious way.
+    """
+    if match is None:
+        return None
+    try:
+        latitude = float(match.group("lat"))
+        longitude = float(match.group("lon"))
+    except ValueError:
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return RiderLocation(latitude=latitude, longitude=longitude, name=name)
 
 
 def coordinates_from_text(text: str | None) -> RiderLocation | None:
@@ -170,36 +207,34 @@ def coordinates_from_text(text: str | None) -> RiderLocation | None:
 
     A convenience path, not the primary one — riders share a location pin. It
     exists because it makes the whole pipeline testable from any WhatsApp
-    client without a GPS fix, and because dispatchers paste coordinates.
+    client without a GPS fix, because dispatchers paste coordinates, and
+    because WhatsApp Web has no location button at all, so it is the *only*
+    way in for anyone testing from a laptop.
     """
     if not text:
         return None
-    match = _COORD_RE.match(text)
-    if not match:
-        return None
-    try:
-        latitude = float(match.group("lat"))
-        longitude = float(match.group("lon"))
-    except ValueError:
-        return None
-    # Same bounds check the location-pin path applies.
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        return None
-    return RiderLocation(latitude=latitude, longitude=longitude, name="typed coordinates")
+    return _coordinates(_COORD_RE.match(text), name="typed coordinates")
 
 
 #: ``to 37.4419, -122.1430`` / ``-> 37.44,-122.14`` / ``dest: …``
 #: The origin is the rider's last known location, which the service already
-#: tracks, so a destination alone is enough to ask for a route.
+#: tracks, so a destination alone is enough to ask for a route. Same decoration
+#: tolerance as the position parser above — a rider who ends the line with a
+#: full stop meant the same thing.
 _DESTINATION_RE = re.compile(
     r"^\s*(?:to|dest(?:ination)?|->|→)\s*[:\s]\s*"
-    r"(?P<lat>[-+]?\d{1,2}(?:\.\d+)?)\s*[,;/\s]\s*(?P<lon>[-+]?\d{1,3}(?:\.\d+)?)\s*$",
+    r"(?:lat(?:itude)?\s*[:=]?\s*)?"
+    rf"(?P<lat>{_NUMBER})\s*°?"
+    r"[\s,;/|]+"
+    r"(?:lon(?:g(?:itude)?)?\s*[:=]?\s*)?"
+    rf"(?P<lon>{_NUMBER})\s*°?"
+    r"[\s.,!?)\]]*$",
     re.IGNORECASE,
 )
 
 
 def destination_from_text(text: str | None) -> RiderLocation | None:
-    """Parse a routing request like ``to 37.4419,-122.1430``, or None.
+    """Parse a routing request like ``to 33.4484,-112.0740``, or None.
 
     Kept separate from :func:`coordinates_from_text` because the two mean
     different things: a bare pair is "where I am", a prefixed one is "where I
@@ -208,14 +243,4 @@ def destination_from_text(text: str | None) -> RiderLocation | None:
     """
     if not text:
         return None
-    match = _DESTINATION_RE.match(text)
-    if not match:
-        return None
-    try:
-        latitude = float(match.group("lat"))
-        longitude = float(match.group("lon"))
-    except ValueError:
-        return None
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        return None
-    return RiderLocation(latitude=latitude, longitude=longitude, name="destination")
+    return _coordinates(_DESTINATION_RE.match(text), name="destination")

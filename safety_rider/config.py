@@ -370,13 +370,20 @@ class Settings:
         default_factory=lambda: _env("SAFETY_RIDER_DEMO_NUMBER")
     )
 
-    #: Where the dashboard map opens. Defaults to San Jose — inside FortyGuard
-    #: coverage, and the area every cached fixture in this repo describes.
+    #: Where the dashboard map opens. Downtown Phoenix — inside FortyGuard's
+    #: U.S.-only coverage, FortyGuard's own worked example, and the city this
+    #: project demos on. It is also the only sensible default for a *heat*
+    #: product: opening on a mild coastal city invites the first question a
+    #: judge should never have to ask, which is why the map is green.
+    #:
+    #: A map that opens somewhere the riders are not reads as a broken
+    #: dashboard for the several seconds before it re-frames itself, and those
+    #: are the opening seconds of a three-minute video.
     map_center_lat: float = field(
-        default_factory=lambda: float(_env("SAFETY_RIDER_MAP_LAT") or 37.3318)
+        default_factory=lambda: float(_env("SAFETY_RIDER_MAP_LAT") or 33.4484)
     )
     map_center_lon: float = field(
-        default_factory=lambda: float(_env("SAFETY_RIDER_MAP_LON") or -121.8899)
+        default_factory=lambda: float(_env("SAFETY_RIDER_MAP_LON") or -112.0740)
     )
 
     # ── Service behaviour ──────────────────────────────────────────────────
