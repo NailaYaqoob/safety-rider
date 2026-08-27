@@ -43,6 +43,12 @@ log = logging.getLogger(__name__)
 #: filesystem it simply starts empty, which is the old behaviour.
 REGISTRY_PATH = Path(os.getenv("SAFETY_RIDER_REGISTRY_PATH") or (ROOT / "data" / "riders.json"))
 
+#: How long a remembered *destination* stays usable. Much shorter than the
+#: position TTL below: a stale position is merely imprecise, but routing someone
+#: to where they were going two shifts ago is confidently wrong, and this drives
+#: an automatic re-route the rider did not ask for in the moment.
+DESTINATION_TTL = timedelta(hours=2)
+
 #: How long a remembered position stays usable. This file holds where people
 #: were, so it is not kept a minute longer than it is useful: 24 hours is also
 #: Meta's customer-service window, past which we cannot send a free-form reply
@@ -87,9 +93,30 @@ class RiderState:
     label: str | None = None
     source: str = "unknown"          # live | mock | unavailable
     observed_date: str | None = None
+    #: Where this rider last said they were heading, and when they said it.
+    #: Kept so a Danger verdict can offer a cooler way there without making
+    #: someone who has just been told to stop riding type out a destination.
+    destination_lat: float | None = None
+    destination_lon: float | None = None
+    destination_at: str | None = None
     updated_at: str = field(
         default_factory=lambda: datetime.now(tz=timezone.utc).isoformat()
     )
+
+    def fresh_destination(self) -> tuple[float, float] | None:
+        """The stored destination if it is recent enough to route to."""
+        if (self.destination_lat is None or self.destination_lon is None
+                or not self.destination_at):
+            return None
+        try:
+            when = datetime.fromisoformat(self.destination_at)
+        except ValueError:
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if datetime.now(tz=timezone.utc) - when > DESTINATION_TTL:
+            return None
+        return (self.destination_lat, self.destination_lon)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -137,7 +164,35 @@ class Hub:
     # ── state ──────────────────────────────────────────────────────────────
 
     def upsert_rider(self, state: RiderState) -> None:
+        """Record a rider's latest evaluation, carrying their destination over.
+
+        An evaluation knows where the rider *is*, not where they are going, so
+        it arrives with no destination attached. Replacing the record outright
+        would therefore erase one every time the rider shared a location —
+        which is exactly the moment before a Danger verdict wants it.
+        """
+        previous = self._riders.get(state.rider_id)
+        if previous is not None and state.destination_lat is None:
+            state.destination_lat = previous.destination_lat
+            state.destination_lon = previous.destination_lon
+            state.destination_at = previous.destination_at
         self._riders[state.rider_id] = state
+        self._save()
+
+    def remember_destination(self, rider_id: str, latitude: float, longitude: float) -> None:
+        """Note where a rider said they were heading.
+
+        A no-op for a rider we have never evaluated: the destination is only
+        useful alongside an origin, and inventing a half-populated record here
+        would put a rider on the dispatcher's map at coordinates they are not
+        standing on.
+        """
+        rider = self._riders.get(rider_id)
+        if rider is None:
+            return
+        rider.destination_lat = latitude
+        rider.destination_lon = longitude
+        rider.destination_at = datetime.now(tz=timezone.utc).isoformat()
         self._save()
 
     def riders(self) -> list[dict[str, Any]]:

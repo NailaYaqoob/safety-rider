@@ -19,10 +19,15 @@ Each one is a way the demo dies on camera.
 1. **Railway volume mounted at `/app/data`.** Without it the hourly cache is
    wiped on every redeploy and every reply falls back to yesterday's peak — the
    "right now" line never appears.
-2. **Warm the Phoenix cell** on the box with the volume mounted:
+2. **Warm the Phoenix cell.** Easiest is to set
+   `SAFETY_RIDER_WARM_CELLS=33.4484,-112.0740` on the deployment and let the
+   built-in schedule do it — it warms at boot and then hourly, so a redeploy an
+   hour before you record is enough. To force one by hand instead, on the box
+   with the volume mounted:
    `python -m safety_rider.warm 33.4484 -112.0740`
-   One billed request, ~4 minutes. Do it the day you record, not the day before —
-   the cache key is hour-scoped and expires on its own.
+   Either way it is one billed request and takes ~4 minutes. Do it the day you
+   record, not the day before — the cache key is hour-scoped and expires on its
+   own.
 3. **`SAFETY_RIDER_DEV_TOOLS=1`** only while recording, **back to `0`** the
    moment you stop. A public URL with it on is a message relay anyone can fire.
 4. **Confirm `SAFETY_RIDER_DEBUG_PAYLOADS=0`.** Payloads carry rider phone

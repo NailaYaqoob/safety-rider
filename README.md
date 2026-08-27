@@ -133,7 +133,7 @@ adjacent product, not a shipped feature.
 |---|---|---|
 | 🟢 **Safe** | under 35 °C | Ride normally. No message clutter. |
 | 🟡 **Warning** | 35 – 40 °C | Hydration protocol, shade breaks, timing advice. |
-| 🔴 **Danger** | 40 °C and above | Automated rest protocol, and an offer to find a cooler route. |
+| 🔴 **Danger** | 40 °C and above | Automated rest protocol, dispatcher escalation, and a cooler route offered unasked. |
 
 Bands are half-open (`35.0 ≤ t < 40.0`), so they partition the line with no gap
 — a rider at 39.6 °C lands in Warning rather than falling through to Safe. A
@@ -143,6 +143,29 @@ Sustained exposure can promote Safe → Warning (≥ 4 hours above the OSHA
 high-heat line), because four hours at 33 °C is a harder day than twenty minutes
 at 34 °C and a peak-only reading cannot tell the difference. It never
 manufactures Danger — that stays anchored to 40 °C.
+
+### What Danger actually triggers
+
+The rest protocol is not just a differently-worded reply. Crossing 40 °C fires
+three things beyond the rider's own message:
+
+- **The dispatcher is told**, on WhatsApp, with the rider's masked number,
+  coordinates, temperature, the threshold crossed, and a map link. A fleet buys
+  this so somebody with authority hears about a stopped rider when it happens,
+  not when the drop runs late. Set `SAFETY_RIDER_DISPATCHER_NUMBER`.
+- **A cooler route is offered without being asked for**, when the rider has
+  said where they were going in the last two hours. Making someone who has just
+  been told to stop riding type out coordinates is the moment they close
+  WhatsApp. It stays silent when there is no destination on file, when the
+  stored one is stale, or when no route is meaningfully cooler — a Danger
+  message is already long, and burying "stop riding now" under "I could not
+  find a better route" would be worse than saying nothing.
+- **The console shows both**, with the automatic route drawn on the map like
+  any other comparison.
+
+The automatic re-route spends the same route budget a rider would have spent by
+asking, so a rider repeatedly re-entering Danger cannot run up billed cells by
+standing still.
 
 **Every verdict names the published threshold it crossed.** The bands above are
 ours; the line underneath them is NOAA's and OSHA's, and both the rider's
@@ -357,7 +380,8 @@ safety_rider/
 ├── heat_risk.py             NOAA/OSHA thresholds, heat-index correction, and the
 │                            citation printed under every verdict.
 ├── routing.py               Candidate routes from OSRM, scored by heat exposure.
-├── warm.py                  Pre-fetches hourly layers out of band (see Cost control).
+├── warm.py                  Pre-fetches hourly layers out of band, on an
+│                            in-process hourly schedule (see Cost control).
 ├── rate_limit.py            Per-rider budgets on messages and route requests.
 ├── events.py                Fan-out hub and rider registry for the dashboard.
 ├── config.py                Every setting, with the reasoning for each default.
@@ -399,9 +423,18 @@ python -m safety_rider.warm 33.4484 -112.0740      # warm one Phoenix cell
 ```
 
 Cost is then bounded by **service area, not traffic** — one request per active
-cell per hour whether one rider pins there or fifty. In production this runs on
-a schedule, one pass per hour per service area. `SAFETY_RIDER_NOWCAST=0` ignores
-the hourly layer entirely.
+cell per hour whether one rider pins there or fifty.
+
+The schedule is built in: name your service area in `SAFETY_RIDER_WARM_CELLS`
+and the service warms those cells hourly, starting at boot. It runs **inside
+the service process** rather than as a cron container or a CI job, and that is
+not incidental — a warmed layer is a file in the heat cache directory and the
+rider path reads that same directory, so an external runner would warm its own
+filesystem and the service would never see it. Anything warming this cache has
+to share the volume with the process reading it.
+
+Empty by default, because every pass spends credits. `SAFETY_RIDER_NOWCAST=0`
+ignores the hourly layer entirely.
 
 **Each rider also has a budget.** Meta authenticates the *sender* of a webhook,
 not the rider inside it, so a valid signature says nothing about whether one
@@ -433,9 +466,11 @@ python tests/test_rider_status.py       # 113 checks
 python tests/test_dashboard.py          #  68 checks
 python tests/test_routing.py            #  48 checks
 python tests/test_rate_limit.py         #  45 checks
+python tests/test_warm.py               #  30 checks
+python tests/test_escalation.py         #  30 checks
 ```
 
-**331 checks**, no pytest required, all exit non-zero on failure. CI runs every
+**391 checks**, no pytest required, all exit non-zero on failure. CI runs every
 suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard

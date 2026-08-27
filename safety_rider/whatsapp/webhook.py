@@ -369,6 +369,13 @@ async def _compare_and_reply(message: InboundMessage, destination: RiderLocation
         "route acknowledgement",
     )
 
+    # Remembered before the comparison runs, so a rider whose routing request
+    # fails on a network blip still has a destination on file when the next
+    # Danger verdict wants one.
+    hub.remember_destination(
+        _display_id(message.from_number), destination.latitude, destination.longitude
+    )
+
     comparison = await asyncio.to_thread(compare_routes, origin, destination)
 
     if comparison is None:
@@ -435,11 +442,22 @@ async def _trigger_rest_protocol(
 ) -> None:
     """Danger-band side effects, separated from the reply that announced them.
 
-    The rider has already been told to stop; this is everything that happens
-    *around* that — currently a structured log line at WARNING so a Danger
-    event is greppable in ops. The dispatcher notification and the cooler
-    re-route both hang off this function, which is why it exists as a seam
-    rather than being inlined above.
+    The rider has already been told to stop. This is everything that happens
+    around that:
+
+    1. A structured WARNING line, so a Danger event is greppable in ops.
+    2. Escalation to the dispatcher, when one is configured. A fleet buys this
+       product so somebody with authority hears about a stopped rider at the
+       moment it happens rather than when the drop runs late.
+    3. An automatic cooler-route comparison, when ``status.reroute`` is set and
+       the rider has recently said where they were going. Making someone who
+       has just been told to stop riding type out coordinates is the point at
+       which they close WhatsApp — so if we already know the destination, the
+       offer arrives without being asked for.
+
+    Nothing here is allowed to raise: the rider has their verdict, and the
+    escalation failing must not turn a delivered warning into a logged
+    traceback.
     """
     log.warning(
         "REST PROTOCOL: rider=%s lat=%.5f lon=%.5f temp=%.1fC hours_above=%s",
@@ -449,6 +467,100 @@ async def _trigger_rest_protocol(
         status.temperature_c if status.temperature_c is not None else float("nan"),
         status.hours_above_threshold,
     )
+
+    await _notify_dispatcher(message, location, status)
+
+    if status.reroute:
+        await _auto_reroute(message, location)
+
+
+async def _notify_dispatcher(
+    message: InboundMessage,
+    location: RiderLocation,
+    status: RiderSafetyStatus,
+) -> None:
+    """Tell the dispatcher a rider has entered the Danger band."""
+    if not settings.dispatcher_number:
+        return
+
+    rider = _display_id(message.from_number)
+    temperature = (
+        f"{status.temperature_c:.1f} °C" if status.temperature_c is not None else "unknown"
+    )
+    body = (
+        f"🔴 *Rest protocol — {rider}*\n\n"
+        f"{message.profile_name + ' is' if message.profile_name else 'A rider is'} "
+        f"in dangerous heat and has been told to stop riding.\n\n"
+        f"Location: {location.latitude:.5f}, {location.longitude:.5f}\n"
+        f"Temperature: *{temperature}*\n"
+        + (f"Threshold: {status.citation}\n" if status.citation else "")
+        + f"\nhttps://maps.google.com/?q={location.latitude:.5f},{location.longitude:.5f}"
+    )
+    delivered = await _safe_graph_call(
+        graph_client.send_text(settings.dispatcher_number, body),
+        "dispatcher escalation",
+    ) is not None
+
+    hub.publish(Event(
+        kind="system",
+        text=(f"Dispatcher notified about {rider}." if delivered else
+              f"⚠️ Could not reach the dispatcher about {rider}."),
+        status="danger" if delivered else "unknown",
+        rider_id=rider,
+    ))
+
+
+async def _auto_reroute(message: InboundMessage, origin: RiderLocation) -> None:
+    """Offer a cooler way to the rider's last stated destination, unasked.
+
+    Silent when there is nothing to offer — no destination, a stale one, the
+    feature switched off, or no route that is meaningfully cooler. A rider in
+    the Danger band has already received a long message telling them to stop;
+    appending "and by the way I could not find a better route" to it would bury
+    the instruction that matters under one that does not.
+    """
+    if not settings.auto_reroute:
+        return
+
+    rider = hub.find_rider(_display_id(message.from_number))
+    destination = rider.fresh_destination() if rider else None
+    if destination is None:
+        return
+
+    # Route budget still applies: this is the same expensive comparison a rider
+    # would have paid for by asking, and a rider repeatedly re-entering Danger
+    # must not be able to spend it without limit.
+    if not _route_limiter.check(message.from_number).allowed:
+        log.info("Skipping the automatic re-route for %s — route budget spent.",
+                 message.from_number)
+        return
+
+    log.info("Auto-rerouting %s to their last destination %.5f,%.5f.",
+             message.from_number, destination[0], destination[1])
+
+    comparison = await asyncio.to_thread(
+        compare_routes, origin, RiderLocation(destination[0], destination[1])
+    )
+    if comparison is None or not comparison.worth_detour:
+        return
+
+    await _safe_graph_call(
+        graph_client.send_text(
+            message.from_number,
+            "I know where you were heading — here's a cooler way there when "
+            "you're ready to move again.\n\n" + comparison.to_whatsapp_text(),
+        ),
+        "automatic cooler route",
+    )
+
+    hub.publish(Event(
+        kind="route",
+        text=(f"Automatic cooler route offered to {_display_id(message.from_number)} "
+              f"after entering Danger — {comparison.reason}."),
+        status="warning",
+        rider_id=_display_id(message.from_number),
+        route=comparison.to_map_payload(),
+    ))
 
 
 async def _safe_graph_call(coro: Awaitable[Any], description: str) -> Any | None:

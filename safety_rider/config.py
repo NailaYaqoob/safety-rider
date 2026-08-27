@@ -230,6 +230,94 @@ class Settings:
         default_factory=lambda: max(1, int(_env("SAFETY_RIDER_MAX_ROUTE_CELLS") or 4))
     )
 
+    # ── Danger escalation (safety_rider/whatsapp/webhook.py) ───────────────
+    #: Where a Danger verdict is escalated, in E.164 without the '+'. Unset
+    #: means the rest protocol stays between the service and the rider, which
+    #: is the honest default for a personal demo — but a fleet buys this
+    #: precisely so a dispatcher hears about a stopped rider without waiting
+    #: for the drop to run late.
+    #:
+    #: Subject to the same 24-hour customer-service window as any other
+    #: free-form message: a dispatcher who has never messaged the business
+    #: number cannot be reached this way, and will need a template.
+    dispatcher_number: str | None = field(
+        default_factory=lambda: _env("SAFETY_RIDER_DISPATCHER_NUMBER")
+    )
+
+    #: Whether a Danger verdict automatically compares a cooler route to the
+    #: rider's last stated destination, instead of asking someone who has just
+    #: been told to stop riding to type one out. Costs route budget and billed
+    #: cells, so it can be switched off.
+    auto_reroute: bool = field(
+        default_factory=lambda: (_env("SAFETY_RIDER_AUTO_REROUTE") or "1").lower()
+        not in {"0", "false", "no"}
+    )
+
+    # ── Nowcast warmer schedule (safety_rider/warm.py) ─────────────────────
+    #: Service-area cells to keep warm, as ``"lat,lon; lat,lon"``. EMPTY BY
+    #: DEFAULT, because every pass spends real credits: one billed heatmap
+    #: request per cell per hour. Nothing starts until an operator names the
+    #: ground they actually cover.
+    #:
+    #: The schedule runs **inside the service**, not as a separate cron job or
+    #: a CI workflow. The warmed layer is a file in the heat cache directory,
+    #: and the rider path reads that same directory — an external runner warms
+    #: its own filesystem and the service never sees it. Anything warming this
+    #: cache has to share the volume with the process reading it.
+    warm_cells_raw: str | None = field(
+        default_factory=lambda: _env("SAFETY_RIDER_WARM_CELLS")
+    )
+
+    #: Seconds between passes. The cache key is hour-scoped, so an hour is the
+    #: natural cadence; shorter buys nothing and bills again.
+    warm_interval_s: float = field(
+        default_factory=lambda: max(
+            60.0, float(_env("SAFETY_RIDER_WARM_INTERVAL_S") or 3600)
+        )
+    )
+
+    #: Hours back to warm per cell per pass. Each one is a separate billed
+    #: request, so 1 is the default and more is a deliberate choice.
+    warm_hours: int = field(
+        default_factory=lambda: max(1, int(_env("SAFETY_RIDER_WARM_HOURS") or 1))
+    )
+
+    @property
+    def warm_cells(self) -> list[tuple[float, float]]:
+        """Parsed ``warm_cells_raw``, silently dropping anything unusable.
+
+        Malformed entries are logged and skipped rather than raising: a typo in
+        one coordinate must not stop the service booting, and the warmer is an
+        optimisation — the daily reading answers without it.
+        """
+        import logging as _logging
+
+        if not self.warm_cells_raw:
+            return []
+
+        log = _logging.getLogger(__name__)
+        cells: list[tuple[float, float]] = []
+        for chunk in self.warm_cells_raw.replace("\n", ";").split(";"):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            parts = chunk.split(",")
+            if len(parts) != 2:
+                log.warning("SAFETY_RIDER_WARM_CELLS: skipping %r — want 'lat,lon'.", chunk)
+                continue
+            try:
+                latitude, longitude = float(parts[0]), float(parts[1])
+            except ValueError:
+                log.warning("SAFETY_RIDER_WARM_CELLS: skipping %r — not numbers.", chunk)
+                continue
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                log.warning("SAFETY_RIDER_WARM_CELLS: skipping %r — out of range. "
+                            "Note the order is lat,lon.", chunk)
+                continue
+            if (latitude, longitude) not in cells:
+                cells.append((latitude, longitude))
+        return cells
+
     # ── Rate limiting (safety_rider/rate_limit.py) ─────────────────────────
     #: Messages one rider may have acted on per :attr:`rate_window_s`. Meta
     #: authenticates the sender of a webhook, not the rider inside it, so

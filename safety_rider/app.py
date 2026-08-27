@@ -17,6 +17,8 @@ Verify Token, then subscribe to the **messages** field.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 
 from fastapi import FastAPI
@@ -27,6 +29,7 @@ from .config import ConfigurationError, settings, validate_startup
 from .dashboard import router as dashboard_router
 from .dashboard.routes import STATIC as DASHBOARD_STATIC
 from .events import hub
+from .warm import run_scheduler, scheduler_should_run
 from .whatsapp import router as whatsapp_router
 
 logging.basicConfig(
@@ -79,7 +82,30 @@ async def _startup() -> None:
             "WhatsApp message to SAFETY_RIDER_DEMO_NUMBER. Set "
             "SAFETY_RIDER_DEV_TOOLS=0 to disable."
         )
+    should_warm, why = scheduler_should_run()
+    if should_warm:
+        # Held on the app so the shutdown hook can cancel it. Without that the
+        # loop closes with a task still polling FortyGuard and asyncio prints a
+        # "Task was destroyed but it is pending" traceback over the shutdown.
+        app.state.warm_task = asyncio.create_task(run_scheduler())
+        log.info("Nowcast warmer started (%s).", why)
+    else:
+        app.state.warm_task = None
+        log.info("Nowcast warmer not running: %s. Riders fall back to the last "
+                 "complete day, which is a correct answer with an older "
+                 "timestamp.", why)
+
     log.info("Dashboard: http://127.0.0.1:8000/dashboard")
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    """Stop the warmer before the loop closes."""
+    task = getattr(app.state, "warm_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 @app.get("/", include_in_schema=False)

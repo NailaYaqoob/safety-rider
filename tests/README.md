@@ -6,8 +6,10 @@
     ../venv/bin/python tests/test_routing.py
     ../venv/bin/python tests/test_dashboard.py
     ../venv/bin/python tests/test_rate_limit.py
+    ../venv/bin/python tests/test_warm.py
+    ../venv/bin/python tests/test_escalation.py
 
-All six run standalone — no pytest required — and exit non-zero on any failure.
+All eight run standalone — no pytest required — and exit non-zero on any failure.
 CI runs the same loop on every push (`.github/workflows/tests.yml`).
 
 | File | Covers |
@@ -17,6 +19,8 @@ CI runs the same loop on every push (`.github/workflows/tests.yml`).
 | `test_rider_status.py` | `getHyperlocalTemperature` (determinism, provenance, non-finite input), `evaluateRiderSafetyStatus` band edges at 34.9/35.0/39.9/40.0, a 0–60 °C sweep proving the bands leave no gap, the Danger rest-protocol flags, the published-threshold citation on every verdict, typed-coordinate parsing, and the unified controller from signed POST through to reply text |
 | `test_routing.py` | Perpendicular waypoint generation, cell sampling spread across the route, cumulative-exposure scoring, ranking and the detour-worth-it floor, coverage-weighted exposure and the refusal to recommend a route we could not measure, scoring on the same number the rider is banded on, and the thinned map payload |
 | `test_rate_limit.py` | The sliding window itself (budget, recovery, notify-once, per-rider isolation, bounded memory, the disable switch), and the pipeline built on it: a flooding rider cut off after one warning, the throttle reaching the dispatcher, and a refused route handing its general budget back so the safety check stays open |
+| `test_warm.py` | The nowcast warmer's schedule: forgiving cell parsing, the guards that keep it switched off unless deliberately enabled, one-cell-at-a-time passes, surviving a failing cell and a failing pass, clean cancellation, and the app starting and stopping it. Every billed call is stubbed — a real warm costs credits and four minutes |
+| `test_escalation.py` | What a Danger verdict does beyond the reply: dispatcher escalation and its contents, remembering a rider's destination across later evaluations, the automatic cooler route and the four cases where it correctly stays silent, and the route budget applying to it |
 | `test_dashboard.py` | Page and vendored assets, phone masking, the state endpoint, the guarded simulator, SSE fan-out and backpressure, honest delivery reporting, the rider registry surviving a restart (including TTL expiry and a corrupt file), and a route comparison reaching the map |
 
 ## Every suite is offline by design

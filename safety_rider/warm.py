@@ -18,12 +18,20 @@ or fifty.
     python -m safety_rider.warm 33.4484 -112.0740
     python -m safety_rider.warm 33.4484 -112.0740 --hours 3
 
-In production this belongs on a schedule, one run per hour per service area.
+In production this runs on a schedule — :func:`run_scheduler`, started by the
+app when ``SAFETY_RIDER_WARM_CELLS`` names the ground a fleet covers.
+
+**The schedule lives inside the service on purpose.** A warmed layer is a file
+in the heat cache directory and the rider path reads that same directory, so a
+separate cron container or a CI workflow would warm its own filesystem and the
+service would never see it. Whatever warms this cache has to share the volume
+with the process reading it.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -140,6 +148,83 @@ def resume_activity(
                       "run --resume again later.", activity_id, status, poll_timeout_s)
             return False
         time.sleep(15)
+
+
+# ─────────────────────────────────────────────────────────────── scheduler
+
+
+async def warm_once(cells: list[tuple[float, float]], hours: int) -> int:
+    """One pass over the service area. Returns how many hours came back warm.
+
+    Cells are warmed **one at a time**, not concurrently. The endpoint is a
+    queue and the wait is queue depth rather than tile count, so firing every
+    cell at once lengthens each one and bills them all simultaneously — the
+    opposite of what an out-of-band warmer is for.
+    """
+    warmed = 0
+    for latitude, longitude in cells:
+        try:
+            # warm_cell blocks for minutes at a time. Off the event loop, or a
+            # single pass would stall every rider waiting on a reply.
+            warmed += await asyncio.to_thread(warm_cell, latitude, longitude, hours)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a scheduler must outlive one bad cell.
+            log.exception("Warming %.4f,%.4f failed; continuing.", latitude, longitude)
+    return warmed
+
+
+async def run_scheduler() -> None:
+    """Warm the configured cells now, then once per interval, forever.
+
+    Never raises. A warmer that takes the service down with it would trade a
+    missing nowcast — which the daily reading already covers — for missing
+    safety verdicts, and the whole point of reading the hourly layer cache-only
+    on the rider path is that its absence costs nothing.
+
+    Cancelled cleanly at shutdown; :exc:`asyncio.CancelledError` is re-raised
+    rather than swallowed so the event loop can actually finish closing.
+    """
+    cells = settings.warm_cells
+    if not cells:
+        return
+
+    log.info(
+        "Nowcast warmer scheduled: %d cell(s), %d hour(s) each, every %.0f min. "
+        "Each cell-hour is one billed FortyGuard request.",
+        len(cells), settings.warm_hours, settings.warm_interval_s / 60,
+    )
+
+    while True:
+        started = time.monotonic()
+        try:
+            warmed = await warm_once(cells, settings.warm_hours)
+            log.info("Warm pass complete: %d of %d cell-hour(s) warm.",
+                     warmed, len(cells) * settings.warm_hours)
+        except asyncio.CancelledError:
+            log.info("Nowcast warmer stopped.")
+            raise
+        except Exception:  # noqa: BLE001 — see the docstring.
+            log.exception("Warm pass failed; will try again next interval.")
+
+        # Measured from the START of the pass, not the end. A pass can take
+        # minutes, and sleeping a full interval afterwards would let the
+        # schedule drift past the hour the cache is keyed on.
+        elapsed = time.monotonic() - started
+        await asyncio.sleep(max(60.0, settings.warm_interval_s - elapsed))
+
+
+def scheduler_should_run() -> tuple[bool, str]:
+    """Whether to start the warmer, and the reason either way (for the log)."""
+    if not settings.warm_cells_raw:
+        return False, "SAFETY_RIDER_WARM_CELLS is not set"
+    if not settings.nowcast:
+        return False, "the nowcast is disabled (SAFETY_RIDER_NOWCAST=0)"
+    if not (settings.heat_live and settings.fortyguard_api_key):
+        return False, "live heat is disabled or no API key is set"
+    if not settings.warm_cells:
+        return False, "SAFETY_RIDER_WARM_CELLS held no usable coordinates"
+    return True, f"{len(settings.warm_cells)} cell(s) configured"
 
 
 def main(argv: list[str] | None = None) -> int:

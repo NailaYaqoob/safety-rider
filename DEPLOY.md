@@ -39,6 +39,8 @@ SAFETY_RIDER_NOWCAST_LOOKBACK=3   # hours to step back if now is not warm (cache
 SAFETY_RIDER_HEAT_TIMEOUT_S=120
 SAFETY_RIDER_DEBUG_PAYLOADS=0
 
+SAFETY_RIDER_WARM_CELLS=33.4484,-112.0740   # your service area; empty = no warming
+SAFETY_RIDER_DISPATCHER_NUMBER=            # who hears about a Danger event
 SAFETY_RIDER_RATE_LIMIT=12
 SAFETY_RIDER_ROUTE_RATE_LIMIT=4
 SAFETY_RIDER_DEV_TOOLS=0
@@ -86,6 +88,10 @@ grid cell**. The volume makes the cache survive deploys.
 The volume also holds `data/riders.json`, the last-known-position registry a
 routing request is answered from. Without it, every redeploy tells a rider who
 pinned a minute ago that we do not know where they are.
+
+**The volume is what makes `SAFETY_RIDER_WARM_CELLS` work at all.** The warmer
+runs inside this process and writes into this cache; on an ephemeral filesystem
+every redeploy throws the warmed hours away and re-bills them on the next pass.
 
 ### Verify
 
