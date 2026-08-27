@@ -129,7 +129,10 @@ Three limits, because a safety tool that overstates itself is worse than none:
   returns its own vocabulary, so classes are matched by substring. When nothing
   is recognised the answer is "unknown", not a confident zero — but a cell of
   recognised paving really is 0 % canopy, and that is the signal worth routing
-  around.
+  around. The vocabulary was checked against the four real satellite responses
+  cached in `data/satellite/` rather than guessed: composite labels like
+  `"road, route"`, the model's own `others` bucket, and `plant` as distinct
+  from `tree` all came from that, and a test pins every one.
 
 Segmentation is Premium and billed, so the rider path reads it **cache-only**,
 like the nowcast. Land cover does not change, so a cell is paid for once and
@@ -515,13 +518,13 @@ python tests/test_heat_risk_live.py     #  27 checks
 python tests/test_rider_status.py       # 113 checks
 python tests/test_dashboard.py          #  82 checks
 python tests/test_routing.py            #  48 checks
-python tests/test_shade.py               #  37 checks
+python tests/test_shade.py               #  64 checks
 python tests/test_rate_limit.py         #  45 checks
 python tests/test_warm.py               #  30 checks
 python tests/test_escalation.py         #  30 checks
 ```
 
-**470 checks**, no pytest required, all exit non-zero on failure. CI runs every
+**497 checks**, no pytest required, all exit non-zero on failure. CI runs every
 suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard

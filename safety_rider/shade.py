@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -61,18 +61,34 @@ _CANOPY_HINTS = ("tree", "canopy", "forest", "woodland")
 #: Ground-level greenery. Cooler underfoot and it does lower the surrounding
 #: air, but it puts nothing between a rider and the sun, so it earns partial
 #: credit rather than full.
-_GREEN_HINTS = ("vegetation", "grass", "shrub", "park", "garden", "crop", "green")
+_GREEN_HINTS = ("vegetation", "grass", "shrub", "park", "garden", "crop",
+                "green", "plant", "field", "hedge", "flower")
 
 #: Surfaces that are recognisably *not* shade. Listed so the module can tell
 #: "this block is genuinely bare asphalt" from "this response used class names
 #: I do not know" — the first is the most useful signal shade routing has, and
 #: reporting it as unknown would throw away exactly the cell a rider should be
 #: routed around.
+#
+# Verified against the four real satellite responses cached in data/satellite/,
+# whose vocabulary is: building, car, earth-ground, fence, grass, others,
+# plant, road-route, sea, sidewalk-pavement, tree, truck. Composite labels use
+# a ", " separator ("road, route"), which substring matching absorbs — an exact
+# list would have missed every one of them.
 _BUILT_HINTS = (
-    "building", "roof", "road", "pavement", "paving", "asphalt", "concrete",
-    "impervious", "parking", "bare", "soil", "sand", "rock", "water", "pool",
-    "railway", "car", "vehicle", "sidewalk", "footpath",
+    "building", "roof", "wall", "road", "pavement", "paving", "asphalt",
+    "concrete", "impervious", "parking", "bare", "soil", "earth", "ground",
+    "sand", "rock", "gravel", "water", "pool", "sea", "river", "lake",
+    "railway", "car", "truck", "bus", "van", "vehicle", "sidewalk", "footpath",
+    "fence", "pole", "sign", "person", "bridge",
 )
+
+#: Classes the model itself declines to name. They are neither shade nor
+#: evidence that the vocabulary is unreadable, so they count toward the total
+#: and nothing else. Every real response seen carries an "others" bucket, and
+#: treating it as unrecognised would have made a genuine reading come back as
+#: "shade unknown".
+_UNCATEGORISED_HINTS = ("other", "unknown", "unlabel", "misc", "background", "void")
 
 #: How much of a green (non-canopy) class counts toward shade.
 _GREEN_CREDIT = 0.35
@@ -104,7 +120,8 @@ def _classify(segments: dict[str, Any]) -> tuple[float, float, list[str]]:
             canopy += share
         elif any(hint in lowered for hint in _GREEN_HINTS):
             green += share
-        elif not any(hint in lowered for hint in _BUILT_HINTS):
+        elif not any(hint in lowered
+                     for hint in _BUILT_HINTS + _UNCATEGORISED_HINTS):
             unmatched.append(str(name))
 
     if total <= 0:
@@ -181,12 +198,20 @@ def shade_fraction(
         if cache_only or client is None:
             return None
 
+        # Not today. The catalog has the same "today is a trap" behaviour here
+        # as it does for heatmaps: the first attempt at this used
+        # date.today() and the activity came back Failed with no reason
+        # attached. The use-case notebooks that DO succeed all request a date
+        # in the past, so the request is dated the same distance back as the
+        # daily heat layer.
+        study_date = (date.today() - timedelta(days=settings.heat_days_back)).isoformat()
         try:
             response = client.satellite_segmentation(
                 latitude=latitude,
                 longitude=longitude,
-                start_date=date.today().isoformat(),
-                filter_type=3,
+                start_date=study_date,
+                start_time="14:00",
+                filter_type=1,
                 granularity=settings.heat_granularity_m,
                 timeout=settings.heat_warm_timeout_s,
                 verbose=False,
@@ -206,6 +231,7 @@ def shade_fraction(
             "cell": [cell_lat, cell_lon],
             "shade_fraction": fraction,
             "image_year": result.get("image_year"),
+            "requested_date": study_date,
             "segments": ((result.get("segmentation") or {}).get("segments") or {}),
         }))
         log.info("Cached shade for cell %.5f,%.5f: %.0f%% canopy-weighted.",

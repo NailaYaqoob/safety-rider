@@ -21,10 +21,15 @@ RUN pip install --no-cache-dir -r requirements-deploy.txt
 COPY fortyguard/ ./fortyguard/
 COPY safety_rider/ ./safety_rider/
 
-# Cache directory for fetched heat layers. Mount a volume here in production —
-# on an ephemeral filesystem every redeploy re-bills the FortyGuard API
-# (~8,440 credits per grid cell).
-RUN mkdir -p /app/data/heatmaps /app/data/env_params
+# Cache directories for fetched layers. Mount a volume at /app/data in
+# production — on an ephemeral filesystem every redeploy re-bills the
+# FortyGuard API (~8,440 credits per grid cell for heat).
+#
+# segmentation/ matters more than its size suggests: land cover never changes,
+# so those cells are billed once and then free forever — but only if the
+# directory survives a deploy. Without the volume they are re-bought every
+# time the container restarts, for data that was already correct.
+RUN mkdir -p /app/data/heatmaps /app/data/env_params /app/data/segmentation
 
 EXPOSE 8000
 

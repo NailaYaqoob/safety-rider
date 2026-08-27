@@ -99,8 +99,13 @@ try:
     got = shade.shade_fraction(33.4484, -112.0740, client=Recorder(), cache_only=False)
     check(f"the warmer fetches and gets a fraction (got {got})", got == 0.6)
     check("exactly one API call", len(calls) == 1)
-    check("filter_type 3 — composition does not vary by hour",
-          calls[0].get("filter_type") == 3)
+    # The first live attempt used filter_type=3 with today's date and the
+    # activity came back Failed with no reason. The shape the working use-case
+    # notebooks send is a single past hour, so that is what goes out now.
+    check("filter_type 1 with a start_time — the shape that actually succeeds",
+          calls[0].get("filter_type") == 1 and calls[0].get("start_time"))
+    check("and never today's date, which the catalog rejects",
+          calls[0].get("start_date") < __import__("datetime").date.today().isoformat())
 
     again = shade.shade_fraction(33.4484, -112.0740, client=Recorder(), cache_only=False)
     check(f"a second warm is served from disk (got {again})", again == 0.6)
@@ -200,6 +205,42 @@ try:
         shade.settings = real_settings
 finally:
     shade._cache_path = real_path
+
+print("\n[13] The real class vocabulary, from cached API responses")
+# The vocabulary was a guess until it was checked against the four genuine
+# satellite responses in data/satellite/. It was wrong in three places:
+# "plant" is real vegetation and went unmatched, while "earth, ground" and the
+# model's own "others" bucket made whole readings come back as unknown. Every
+# one of those is a silent wrong answer, so they are pinned here.
+import glob as _glob
+
+DOCUMENTED = ["building", "car", "earth, ground", "fence", "grass", "others",
+              "plant", "road, route", "sea", "sidewalk, pavement", "tree", "truck"]
+for cls in DOCUMENTED:
+    single = shade._classify({cls: 100.0})
+    check(f"{cls!r} is recognised, not left unmatched", single[2] == [])
+
+check("'plant' counts as vegetation", shade._classify({"plant": 100.0})[1] == 1.0)
+check("'tree' counts as canopy", shade._classify({"tree": 100.0})[0] == 1.0)
+check("'earth, ground' is neither", shade._classify({"earth, ground": 100.0})[:2] == (0.0, 0.0))
+check("a composite label matches on its keyword",
+      shade._classify({"road, route": 100.0})[2] == [])
+check("'others' does not make a reading unknown",
+      f(seg(tree=30.0, others=70.0)) == 0.3)
+
+fixtures = sorted(_glob.glob("data/satellite/*.json"))
+check(f"cached satellite fixtures are present ({len(fixtures)})", len(fixtures) >= 1)
+for path in fixtures:
+    payload = json.loads(pathlib.Path(path).read_text())
+    result = payload.get("result", payload)
+    segments = ((result.get("segmentation") or {}).get("segments") or {})
+    if not segments:
+        continue
+    name = pathlib.Path(path).name[:38]
+    _, _, unmatched = shade._classify(segments)
+    check(f"every class understood in {name} (unmatched={unmatched})", unmatched == [])
+    value = shade.shade_fraction_from_result(result)
+    check(f"  -> a usable fraction: {value}", value is not None and 0.0 <= value <= 1.0)
 
 print("\n" + ("ALL SHADE CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
 raise SystemExit(0 if ok else 1)
