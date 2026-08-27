@@ -290,6 +290,62 @@ hub.clear()
 check("reset clears the route with everything else",
       client.get("/api/dashboard/state").json()["route"] is None)
 
+print("\n[13] The heat overlay is served from cache, never billed")
+# This is what makes "per-tile verdicts, not a city average" visible instead of
+# merely claimed. It is fetched by the browser on a toggle and on every rider,
+# so it must not be able to reach the API — an idle tab would spend credits.
+import json as _json
+from datetime import date as _date, timedelta as _timedelta
+
+from safety_rider.heat_layer import cache_dir, grid_key
+
+r = client.get("/api/dashboard/heat", params={"lat": 33.4484, "lon": -112.0740})
+check(f"an un-cached cell is a 404, not a fetch (got {r.status_code})", r.status_code == 404)
+check("and explains how the layer gets there",
+      "cached" in r.json()["detail"] and "warmer" in r.json()["detail"])
+
+sample = pathlib.Path("data/heatmaps/heatmap_parcel_diridon_san_jose_2024-07-15_tcm.json")
+if not sample.exists():
+    check("sample layer fixture is present", False)
+else:
+    lat, lon = 37.3318, -121.8899
+    cell_lat, cell_lon = grid_key(lat, lon)
+    seeded = (_date.today() - _timedelta(days=3)).isoformat()
+    seed_path = cache_dir() / f"heatmap_rider_{cell_lat:.5f}_{cell_lon:.5f}_{seeded}_tcm.json"
+    seed_path.write_text(sample.read_text(), encoding="utf-8")
+    try:
+        r = client.get("/api/dashboard/heat", params={"lat": lat, "lon": lon})
+        check(f"a cached cell is served (got {r.status_code})", r.status_code == 200)
+        layer = r.json()
+        check("as a GeoJSON FeatureCollection", layer["type"] == "FeatureCollection")
+        check(f"with every tile ({layer['tiles']})", layer["tiles"] > 0)
+        check("the date the tiles describe travels with them",
+              layer["observed_date"] == seeded)
+        check("so does the range the colour ramp needs",
+              layer["min_c"] <= layer["max_c"])
+        feature = layer["features"][0]
+        check("each tile is a polygon", feature["geometry"]["type"] == "Polygon")
+        check("carrying exactly one property — the peak",
+              list(feature["properties"]) == ["t"])
+        check("coordinates are rounded, not full float precision",
+              all(len(str(c).split(".")[-1]) <= 5
+                  for c in feature["geometry"]["coordinates"][0][0]))
+        check("the response is cacheable — a written layer never changes",
+              "max-age" in r.headers.get("cache-control", ""))
+        check(f"and it is smaller than the raw response "
+              f"({len(r.content)} vs {seed_path.stat().st_size} bytes)",
+              len(r.content) < seed_path.stat().st_size)
+    finally:
+        seed_path.unlink(missing_ok=True)
+
+    # With the seed gone the walk-back continues rather than stopping: this
+    # cell may hold genuinely older layers from real runs, and an older date is
+    # a correct answer where a stale *seeded* one would not be.
+    after = client.get("/api/dashboard/heat", params={"lat": lat, "lon": lon})
+    check("with the seed removed it either falls back or reports nothing — "
+          f"never re-serves the deleted layer (got {after.status_code})",
+          after.status_code == 404 or after.json()["observed_date"] != seeded)
+
 hub.clear()
 print("\n" + ("ALL DASHBOARD CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
 raise SystemExit(0 if ok else 1)

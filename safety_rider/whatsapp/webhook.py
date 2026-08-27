@@ -200,6 +200,13 @@ async def handle_message(message: InboundMessage) -> None:
         if not await _within_budget(message):
             return
 
+        # Every inbound message reaches the feed, not just the ones that end in
+        # a verdict. A dispatcher should see a rider make contact even when
+        # nothing came of it — and when the pipeline looks dead from outside,
+        # this line is the difference between "no messages are arriving" and
+        # "messages arrive but carry nothing we can act on".
+        _publish_inbound(message)
+
         await _safe_graph_call(
             graph_client.mark_as_read(message.message_id), "read receipt"
         )
@@ -225,6 +232,39 @@ async def handle_message(message: InboundMessage) -> None:
 
     except Exception:  # noqa: BLE001 — background task: log, never propagate.
         log.exception("Failed to handle message %s", message.message_id)
+
+
+
+
+#: Message types WhatsApp can send that carry no position and no useful text.
+#: Named so the reply can say what actually arrived instead of repeating the
+#: same prompt at someone who is already trying to do the right thing.
+_UNUSABLE_TYPES = {
+    "image": "a photo", "video": "a video", "audio": "a voice note",
+    "sticker": "a sticker", "document": "a document", "contacts": "a contact card",
+    "unsupported": "a message type the WhatsApp API does not forward",
+}
+
+
+def _publish_inbound(message: InboundMessage) -> None:
+    """Put one line on the dashboard for an inbound message."""
+    if message.location is not None:
+        what = (f"shared a location — {message.location.latitude:.4f}, "
+                f"{message.location.longitude:.4f}")
+    elif message.text:
+        # Truncated: the feed is built to be screen-shared, and a rider's full
+        # message is neither needed for triage nor ours to broadcast.
+        snippet = message.text if len(message.text) <= 40 else message.text[:39] + "…"
+        what = f"sent: \u201c{snippet}\u201d"
+    else:
+        what = f"sent {_UNUSABLE_TYPES.get(message.message_type, message.message_type)}"
+
+    hub.publish(Event(
+        kind="message",
+        text=f"Rider {_display_id(message.from_number)} {what}",
+        status="info",
+        rider_id=_display_id(message.from_number),
+    ))
 
 
 async def _within_budget(message: InboundMessage) -> bool:
@@ -650,11 +690,25 @@ def publish_evaluation(
 
 
 def _location_prompt(message: InboundMessage) -> str:
-    """Reply used when a rider writes in without sharing a location."""
+    """Reply used when a rider writes in without sharing a location.
+
+    Names what actually arrived when it was something we cannot use. Answering
+    a photo with the same generic greeting reads as a bot that did not notice,
+    and the commonest cause of a rider getting stuck here is real: WhatsApp Web
+    and Desktop have no location button at all, so someone testing from a
+    laptop can never satisfy the first instruction.
+    """
     greeting = f"Hi {message.profile_name}! " if message.profile_name else "Hi! "
+    noticed = ""
+    if message.location is None and message.message_type in _UNUSABLE_TYPES:
+        noticed = (f"I got {_UNUSABLE_TYPES[message.message_type]}, which does not "
+                   "tell me where you are. ")
+
     return (
-        f"{greeting}I check how hot it is exactly where you are, and tell you "
-        "whether it is safe to ride.\n\n"
+        f"{greeting}{noticed}I check how hot it is exactly where you are, and "
+        "tell you whether it is safe to ride.\n\n"
         "_Tap 📎 → Location → Send your current location._\n\n"
-        "You can also just type coordinates, e.g. `37.3318, -121.8899`."
+        "On WhatsApp Web or Desktop there is no location button — send the pin "
+        "from your phone, or just type coordinates:\n"
+        "`33.4484, -112.0740`"
     )

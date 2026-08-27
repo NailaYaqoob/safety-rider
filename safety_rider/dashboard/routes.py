@@ -4,6 +4,7 @@ Endpoints
 ---------
 ``GET  /dashboard``                  the page itself
 ``GET  /api/dashboard/state``        riders + recent events, for first paint
+``GET  /api/dashboard/heat``         cached heat tiles as GeoJSON, for the overlay
 ``GET  /api/dashboard/stream``       Server-Sent Events, one per evaluation
 ``POST /api/dashboard/simulate``     force a heat spike (demo only)
 
@@ -16,16 +17,18 @@ than anything a socket would buy.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..events import Event, hub
+from ..heat_layer import cached_tcm_geojson
 from ..heat_risk import DANGER_C, OSHA_HIGH_C
 from ..models import RiderLocation
 from ..rider_status import evaluate_rider_safety_status
@@ -69,6 +72,51 @@ async def dashboard_state() -> dict:
         # banding engine that decided the colours next to it.
         "thresholds": {"high_heat_c": OSHA_HIGH_C, "danger_c": DANGER_C},
     }
+
+
+@router.get("/api/dashboard/heat")
+async def heat_overlay(request: Request, lat: float, lon: float) -> Response:
+    """The cached heat tiles around a point, as GeoJSON for the map overlay.
+
+    This is what turns "per-tile verdicts" from a claim into something a
+    dispatcher can see: the same layer the banding engine reads, drawn under
+    the riders standing on it.
+
+    **Cache-only.** The dashboard calls this on a toggle and whenever a rider
+    appears, so a version that could fetch would let an idle browser tab spend
+    FortyGuard credits. A cell nobody has queried has no overlay — 404 with a
+    reason, rather than a bill.
+    """
+    layer = await asyncio.to_thread(cached_tcm_geojson, lat, lon)
+    if layer is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "detail": (
+                    "No heat layer cached for this area yet. It is fetched the "
+                    "first time a rider is evaluated here, or by the warmer "
+                    "(SAFETY_RIDER_WARM_CELLS)."
+                )
+            },
+        )
+    # Compressed here rather than by a global GZip middleware. This is the one
+    # large response the service sends — ~2 MB for a 10,000-tile AOI, mostly
+    # repeated coordinate digits — and a middleware broad enough to catch it
+    # would also wrap /api/dashboard/stream, where buffering for compression is
+    # exactly what stops a live feed being live.
+    payload = json.dumps(layer, separators=(",", ":")).encode("utf-8")
+    headers = {
+        # Long-lived: a cached daily layer never changes once it is written.
+        "Cache-Control": "public, max-age=3600",
+        # The body varies by encoding, so a shared cache must not hand a
+        # gzipped payload to a client that did not ask for one.
+        "Vary": "Accept-Encoding",
+    }
+    if "gzip" in request.headers.get("Accept-Encoding", "").lower():
+        payload = gzip.compress(payload, compresslevel=6)
+        headers["Content-Encoding"] = "gzip"
+
+    return Response(content=payload, media_type="application/geo+json", headers=headers)
 
 
 @router.get("/api/dashboard/stream")

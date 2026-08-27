@@ -265,6 +265,14 @@ blocks apart, so it drives the advice.
 The operator-facing half of the product: one screen a dispatcher can leave open
 for a shift.
 
+- **The heat layer itself, drawn on the map** — the same FortyGuard tiles the
+  banding engine reads, coloured cool-to-hot under the riders standing on them.
+  This is what makes "per-tile verdicts, not a city average" something you can
+  see rather than something the pitch asserts. Served **cache-only**, so an
+  open browser tab can never spend credits, and a partial day is refused for
+  the overlay exactly as it is for a verdict — drawing an un-ingested day would
+  paint one hour's noise as a day's heat gradient, in colour, on the screen a
+  dispatcher trusts.
 - **Live map** (Leaflet) with a marker per rider — green Safe, orange Warning,
   **blinking red Danger**, auto-panning to anyone entering Danger, and framing
   itself on wherever the fleet actually is.
@@ -463,14 +471,14 @@ Three details matter more than the numbers:
 python tests/test_whatsapp_webhook.py   #  30 checks
 python tests/test_heat_risk_live.py     #  27 checks
 python tests/test_rider_status.py       # 113 checks
-python tests/test_dashboard.py          #  68 checks
+python tests/test_dashboard.py          #  81 checks
 python tests/test_routing.py            #  48 checks
 python tests/test_rate_limit.py         #  45 checks
 python tests/test_warm.py               #  30 checks
 python tests/test_escalation.py         #  30 checks
 ```
 
-**391 checks**, no pytest required, all exit non-zero on failure. CI runs every
+**404 checks**, no pytest required, all exit non-zero on failure. CI runs every
 suite on push — [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 Every suite is **offline by construction, not by convention**: the FortyGuard

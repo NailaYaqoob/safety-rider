@@ -21,7 +21,7 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -219,6 +219,123 @@ class HeatLayer:
             return None
         return self.properties[idx]
 
+
+
+
+def _is_partial_day(features: list[dict[str, Any]]) -> bool:
+    """True when a daily layer is really one ingested hour wearing a day's name.
+
+    A complete day spans a real diurnal range, so a tile's min and max differ.
+    A partial one carries the same number in both on every tile. Sampling a few
+    tiles is enough — the collapse is total, not patchy — and beats walking ten
+    thousand of them on every dashboard request.
+    """
+    checked = 0
+    for feature in features:
+        props = feature.get("properties") or {}
+        low, high = props.get("min_temperature"), props.get("max_temperature")
+        if low is None or high is None:
+            continue
+        try:
+            if abs(float(high) - float(low)) >= 0.01:
+                return False
+        except (TypeError, ValueError):
+            continue
+        checked += 1
+        if checked >= 25:
+            break
+    return checked > 0
+
+
+def cached_tcm_geojson(
+    latitude: float,
+    longitude: float,
+    *,
+    max_days_back: int | None = None,
+) -> dict[str, Any] | None:
+    """The cached daily heat tiles for this cell, trimmed for the browser.
+
+    **Reads the cache only — never calls the API.** The dashboard fetches this
+    on a button press and on every rider that appears, so a version that could
+    bill would turn an idle browser tab into a spend. A cell nobody has queried
+    simply has no overlay, which is the honest answer.
+
+    Returns a GeoJSON FeatureCollection whose features carry a single ``t``
+    property (the tile's peak °C), plus the range and the date the tiles
+    describe. ``None`` when nothing is cached for this cell.
+
+    The trimming matters: the raw response is ~930 KB for 10,000 tiles and
+    carries four properties per tile plus full float precision. Coordinates are
+    rounded to five decimals — about a metre, well under the 60-100 m tile — and
+    only the peak survives, which is what the colour ramp reads.
+    """
+    cell_lat, cell_lon = grid_key(latitude, longitude)
+    directory = cache_dir()
+    horizon = max_days_back if max_days_back is not None else (
+        settings.heat_days_back + settings.heat_backfill_days
+    )
+
+    today = date.today()
+    for step in range(horizon + 1):
+        study_date = (today - timedelta(days=step)).isoformat()
+        path = directory / f"heatmap_rider_{cell_lat:.5f}_{cell_lon:.5f}_{study_date}_tcm.json"
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, ValueError):
+            log.warning("Cached layer %s is unreadable — skipping.", path.name)
+            continue
+
+        features_in = ((raw.get("map_data") or {}).get("features") or [])
+        if _is_partial_day(features_in):
+            # The same layer the verdict path refuses: a day the catalog has
+            # not finished ingesting returns one hour's snapshot with
+            # min == mean == max on every tile. Drawing it would paint an
+            # hour's noise as a day's heat gradient, in colour, on the screen
+            # a dispatcher trusts — a prettier version of the exact mistake
+            # temperature_service exists to avoid. Walk back instead.
+            log.info("Cached layer for %s is a partial day — not drawing it.", study_date)
+            continue
+
+        features: list[dict[str, Any]] = []
+        low = high = None
+        for feature in features_in:
+            geometry = feature.get("geometry") or {}
+            props = feature.get("properties") or {}
+            peak = props.get("max_temperature")
+            if geometry.get("type") != "Polygon" or peak is None:
+                continue
+            try:
+                peak = round(float(peak), 2)
+            except (TypeError, ValueError):
+                continue
+            rings = [[[round(float(x), 5), round(float(y), 5)] for x, y in ring]
+                     for ring in geometry.get("coordinates", [])]
+            if not rings:
+                continue
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": rings},
+                "properties": {"t": peak},
+            })
+            low = peak if low is None else min(low, peak)
+            high = peak if high is None else max(high, peak)
+
+        if not features:
+            continue
+
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "observed_date": study_date,
+            "cell": [cell_lat, cell_lon],
+            "min_c": low,
+            "max_c": high,
+            "tiles": len(features),
+        }
+
+    return None
 
 def fetch_layers(
     client: Any,
