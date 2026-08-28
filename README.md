@@ -12,6 +12,12 @@ Built on the [FortyGuard Temperature API](https://fortyguard.com) for
 **FortyGuard Hackathon'26 — Track 3, Industrial & Enterprise**: a logistics
 route-and-temperature tool that protects worker safety on last-mile routes.
 
+**Live demo:
+[safety-rider-production.up.railway.app/dashboard](https://safety-rider-production.up.railway.app/dashboard)**
+— the dispatch console, running against the live FortyGuard API. The map opens
+on Phoenix; the heat layer is served cache-only, so an open tab never spends
+credits.
+
 ---
 
 ## Who buys this, and why
@@ -327,7 +333,8 @@ blocks apart, so it drives the advice.
 
 ## The dispatch console
 
-`http://localhost:8000/dashboard`
+**Live:** <https://safety-rider-production.up.railway.app/dashboard>
+· locally: `http://localhost:8000/dashboard`
 
 The operator-facing half of the product: one screen a dispatcher can leave open
 for a shift.

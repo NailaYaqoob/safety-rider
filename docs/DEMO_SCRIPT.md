@@ -128,7 +128,7 @@ the `filter_type` discovery table.
 > by construction, so the same check has to be switched off on that path.
 > Forecast hours come back well-formed and completely empty. We found each of
 > these the expensive way, and every one is guarded in code and covered by
-> tests — two hundred and thirty-seven of them.
+> tests — four hundred and ninety-seven of them.
 
 *(89 words)*
 
